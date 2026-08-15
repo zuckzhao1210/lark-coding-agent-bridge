@@ -73,6 +73,10 @@ export function systemdUnitPath(profile: string = paths.profile): string {
   return join(base, 'systemd', 'user', systemdUnitName(profile));
 }
 
+export function agentProxyEnvPath(profile: string = paths.profile): string {
+  return join(paths.appDir, 'daemon', serviceProfileId(profile), 'agent-proxy.env');
+}
+
 // === Windows Task Scheduler ===
 
 /**

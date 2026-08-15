@@ -103,6 +103,15 @@ function makeLaunchdAdapter(profile: string, runArgs: string[]): ServiceAdapter 
 }
 
 function makeSystemdAdapter(profile: string, runArgs: string[]): ServiceAdapter {
+  const withCurrentAgentProxyEnvironment = async (
+    action: () => ServiceResult,
+  ): Promise<ServiceResult> => {
+    await systemd.writeUnit(profile, runArgs);
+    await systemd.writeAgentProxyEnvironment(profile);
+    const reloaded = systemd.daemonReload();
+    return reloaded.ok ? action() : reloaded;
+  };
+
   return {
     platformName: 'systemd (Linux user)',
     fileExists: () => systemd.unitExists(profile),
@@ -113,11 +122,11 @@ function makeSystemdAdapter(profile: string, runArgs: string[]): ServiceAdapter 
       // systemd needs daemon-reload after any unit file change.
       systemd.daemonReload();
     },
-    start: () => systemd.enableAndStart(profile),
+    start: () => withCurrentAgentProxyEnvironment(() => systemd.enableAndStart(profile)),
     stop: () => systemd.stop(profile),
     stopAndDisableAutostart: () => systemd.disableAndStop(profile),
     disableAutostart: () => systemd.disable(profile),
-    restart: () => systemd.restart(profile),
+    restart: () => withCurrentAgentProxyEnvironment(() => systemd.restart(profile)),
     waitUntilStopped: (timeoutMs) => systemd.waitUntilInactive(profile, timeoutMs),
     deleteFile: async () => {
       await systemd.deleteUnit(profile);

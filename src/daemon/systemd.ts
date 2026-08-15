@@ -2,7 +2,10 @@ import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
+import { writeFileAtomic } from '../platform/atomic-write';
+import { PROXY_ENV_NAMES, serializeAgentProxyEnvironment } from '../platform/proxy-env';
 import {
+  agentProxyEnvPath,
   daemonLogDir,
   daemonStderrPath,
   daemonStdoutPath,
@@ -45,6 +48,8 @@ export interface UnitInputs {
  */
 export function buildUnit(inputs: UnitInputs): string {
   const escape = (s: string): string => s.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const escapeWord = (s: string): string =>
+    s.replace(/\\/g, '\\\\').replace(/[\s"']/g, (char) => `\\x${char.charCodeAt(0).toString(16)}`);
   // Profile names / flags are validated safe tokens (no spaces), so appending
   // them unquoted is fine.
   const runArgs = inputs.runArgs.join(' ');
@@ -62,6 +67,8 @@ StandardOutput=append:${daemonStdoutPath(inputs.profile)}
 StandardError=append:${daemonStderrPath(inputs.profile)}
 Environment="PATH=${escape(inputs.envPath)}"
 Environment="LARK_CHANNEL_HOME=${escape(inputs.channelHome)}"
+EnvironmentFile=-${escapeWord(agentProxyEnvPath(inputs.profile))}
+UnsetEnvironment=${PROXY_ENV_NAMES.join(' ')}
 
 [Install]
 WantedBy=default.target
@@ -85,6 +92,13 @@ export async function writeUnit(profile: string, runArgs: string[] = ['run']): P
   await mkdir(dirname(unitPath), { recursive: true });
   await mkdir(daemonLogDir(profile), { recursive: true });
   await writeFile(unitPath, content, 'utf8');
+}
+
+export async function writeAgentProxyEnvironment(
+  profile: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<void> {
+  await writeFileAtomic(agentProxyEnvPath(profile), serializeAgentProxyEnvironment(env));
 }
 
 export function unitExists(profile: string): boolean {
