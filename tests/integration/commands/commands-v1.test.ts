@@ -4,7 +4,11 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { NormalizedMessage } from '@larksuite/channel';
 import { ActiveRuns } from '../../../src/bot/active-runs.js';
 import { tryHandleCommand, type CommandContext, type Controls } from '../../../src/commands/index.js';
-import { createDefaultProfileConfig, type ProfileConfig } from '../../../src/config/profile-schema.js';
+import {
+  createDefaultProfileConfig,
+  type AgentKind,
+  type ProfileConfig,
+} from '../../../src/config/profile-schema.js';
 import { createRootConfig, loadRootConfig, saveRootConfig } from '../../../src/config/profile-store.js';
 import { SessionStore } from '../../../src/session/store.js';
 import { WorkspaceStore } from '../../../src/workspace/store.js';
@@ -258,6 +262,36 @@ describe('Bridge command contracts', () => {
     expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
   });
 
+  it('switches the Codex profile model through /model aliases', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run('/model')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('/model sol');
+    expect(lastMarkdown(h.channel)).toContain('跟随默认');
+
+    await expect(h.run('/model SOL')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('GPT-5.6 Sol');
+    expect(lastMarkdown(h.channel)).toContain('下一条消息');
+    expect(h.controls.profileConfig.preferences.model).toBe('gpt-5.6-sol');
+
+    let root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.codex?.preferences.model).toBe('gpt-5.6-sol');
+
+    await expect(h.run('/model unsupported')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('不支持的模型');
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.codex?.preferences.model).toBe('gpt-5.6-sol');
+
+    await expect(h.run('/model default')).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('跟随默认');
+    expect(h.controls.profileConfig.preferences.model).toBeUndefined();
+    root = await loadRootConfig(h.controls.configPath);
+    expect(root?.profiles.codex?.preferences).not.toHaveProperty('model');
+
+    await expect(h.run('/model terra', { senderId: 'ou-not-admin' })).resolves.toBe(true);
+    expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
+  });
+
   it('does not expose access allowlists through the Lark /config form', async () => {
     const h = await createHarness();
 
@@ -313,7 +347,7 @@ describe('Bridge command contracts', () => {
   });
 });
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(agentKind: AgentKind = 'claude'): Promise<Harness> {
   const tmp = await createTmpProfile('commands-v1-');
   const channel = createFakeChannel();
   const sessions = new SessionStore(join(tmp.profile, 'sessions.json'));
@@ -321,11 +355,11 @@ async function createHarness(): Promise<Harness> {
   const activeRuns = new ActiveRuns();
   const agent = createFakeAgent();
   const workspaceRealpath = await realpath(tmp.workspace);
-  const profileConfig = appConfig(workspaceRealpath);
+  const profileConfig = appConfig(workspaceRealpath, agentKind);
   const configPath = join(tmp.root, 'config.json');
-  await saveRootConfig(createRootConfig('claude', profileConfig), configPath);
+  await saveRootConfig(createRootConfig(agentKind, profileConfig), configPath);
   const controls = {
-    profile: 'claude',
+    profile: agentKind,
     profileConfig,
     botOwnerId: 'ou-owner',
     ownerRefreshState: 'ok',
@@ -368,13 +402,14 @@ async function createHarness(): Promise<Harness> {
   return { tmp, channel, sessions, workspaces, activeRuns, agent, controls, run };
 }
 
-function appConfig(defaultWorkspace: string): ProfileConfig {
+function appConfig(defaultWorkspace: string, agentKind: AgentKind): ProfileConfig {
   const config = createDefaultProfileConfig({
-    agentKind: 'claude',
+    agentKind,
     accounts: { app: { id: 'app-id', secret: 'secret', tenant: 'feishu' } },
     access: { admins: ['ou-admin'] },
     sandbox: { defaultMode: 'read-only', maxMode: 'workspace-write' },
     preferences: { maxConcurrentRuns: 2 },
+    ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
   });
   config.workspaces.default = defaultWorkspace;
   return config;

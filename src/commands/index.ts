@@ -4,7 +4,13 @@ import { homedir } from 'node:os';
 import { dirname, isAbsolute } from 'node:path';
 import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
-import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
+import {
+  DEFAULT_MODEL,
+  modelLabel,
+  normalizeModelSelection,
+  resolveModelCommandSelection,
+  supportedModels,
+} from '../agent/models';
 import type { AgentAdapter } from '../agent/types';
 import type { ActiveRuns } from '../bot/active-runs';
 import {
@@ -176,6 +182,7 @@ const handlers: Record<string, Handler> = {
   '/help': handleHelp,
   '/account': handleAccount,
   '/config': handleConfig,
+  '/model': handleModel,
   '/stop': handleStop,
   '/timeout': handleTimeout,
   '/ps': handlePs,
@@ -196,6 +203,7 @@ const handlers: Record<string, Handler> = {
 const ADMIN_COMMANDS = new Set([
   '/account',
   '/config',
+  '/model',
   '/ps',
   '/exit',
   '/reconnect',
@@ -1336,7 +1344,74 @@ async function handleHelp(_args: string, ctx: CommandContext): Promise<void> {
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
 }
 
-// ─── /account ─────────────────────────────────────────────────────────────
+// ─── /model ──────────────────────────────────────────────────
+
+async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  const agentKind = ctx.controls.profileConfig.agentKind;
+  const currentPreference = ctx.controls.profileConfig.preferences.model;
+  const current = normalizeModelSelection(agentKind, currentPreference);
+  const input = args.trim();
+
+  if (!input) {
+    const options = agentKind === 'codex'
+      ? [
+          '`/model sol` — GPT-5.6 Sol',
+          '`/model terra` — GPT-5.6 Terra',
+          '`/model luna` — GPT-5.6 Luna',
+          '`/model default` — 跟随 Codex 默认',
+        ]
+      : [
+          ...supportedModels(agentKind)
+            .filter((model) => model.value !== DEFAULT_MODEL)
+            .map((model) => `\`/model ${model.value}\` — ${model.label}`),
+          '`/model default` — 跟随 Claude Code 默认',
+        ];
+    await reply(
+      ctx,
+      [
+        `当前模型：**${modelLabel(agentKind, current)}**`,
+        '',
+        '可用命令：',
+        ...options,
+        '',
+        '_模型是 Profile 全局设置，保存后从下一条消息开始生效。_',
+      ].join('\n'),
+    );
+    return;
+  }
+
+  const selection = resolveModelCommandSelection(agentKind, input);
+  if (!selection) {
+    await reply(ctx, `不支持的模型：\`${input}\`。发送 \`/model\` 查看可用选项。`);
+    return;
+  }
+  if (selection === current && (selection !== DEFAULT_MODEL || !currentPreference)) {
+    await reply(ctx, `当前已是 **${modelLabel(agentKind, current)}**。`);
+    return;
+  }
+
+  const model = selection === DEFAULT_MODEL ? undefined : selection;
+  try {
+    await configOps.saveModelPreference(ctx.controls, model);
+  } catch (err) {
+    log.fail('command', err, { step: 'model.save' });
+    reportMetric('command_fail', 1, { step: 'model.save' });
+    await reply(ctx, '❌ 模型切换保存失败，请重试。');
+    return;
+  }
+
+  log.info('command', 'model-switched', {
+    profile: ctx.controls.profile,
+    agentKind,
+    model: selection,
+  });
+  await reply(
+    ctx,
+    `✅ 已切换为 **${modelLabel(agentKind, selection)}**\n\n从下一条消息开始生效。`,
+  );
+}
+
+// ─── /account ──────────────────────────────────────────────────
 
 async function handleAccount(args: string, ctx: CommandContext): Promise<void> {
   const sub = args.trim().split(/\s+/)[0] ?? '';

@@ -38,14 +38,43 @@ const CLAUDE_MODELS: ModelOption[] = [
 /** Codex CLI models. Forwarded to `codex exec --model`. */
 const CODEX_MODELS: ModelOption[] = [
   { value: DEFAULT_MODEL, label: '跟随默认（不指定）' },
+  { value: 'gpt-5.6-sol', label: 'GPT-5.6 Sol（最新）' },
+  { value: 'gpt-5.6-terra', label: 'GPT-5.6 Terra' },
+  { value: 'gpt-5.6-luna', label: 'GPT-5.6 Luna' },
   { value: 'gpt-5-codex', label: 'GPT-5 Codex' },
   { value: 'gpt-5', label: 'GPT-5' },
   { value: 'o3', label: 'o3' },
 ];
 
+const CODEX_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  sol: 'gpt-5.6-sol',
+  terra: 'gpt-5.6-terra',
+  luna: 'gpt-5.6-luna',
+};
+
 /** The model picker options for a profile's agent kind. */
 export function supportedModels(agentKind: AgentKind): ModelOption[] {
   return agentKind === 'codex' ? CODEX_MODELS : CLAUDE_MODELS;
+}
+
+/**
+ * Resolve a `/model` argument to a supported stored selection. Full model IDs
+ * work for every agent; Codex additionally accepts the short Sol/Terra/Luna
+ * names used in chat. Matching is case-insensitive for a friendlier command
+ * surface. Returns undefined when the input is not in the current catalog.
+ */
+export function resolveModelCommandSelection(
+  agentKind: AgentKind,
+  input: string,
+): string | undefined {
+  const normalized = input.trim().toLowerCase();
+  if (!normalized) return undefined;
+  if (normalized === DEFAULT_MODEL) return DEFAULT_MODEL;
+
+  const aliased = agentKind === 'codex'
+    ? (CODEX_MODEL_ALIASES[normalized] ?? normalized)
+    : normalized;
+  return supportedModels(agentKind).find((model) => model.value.toLowerCase() === aliased)?.value;
 }
 
 /** True when the selection means "use the agent default" (no `--model`). */

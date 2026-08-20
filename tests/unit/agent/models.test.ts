@@ -5,6 +5,7 @@ import {
   modelLabel,
   normalizeModelSelection,
   resolveModelArg,
+  resolveModelCommandSelection,
   supportedModels,
 } from '../../../src/agent/models.js';
 
@@ -16,6 +17,11 @@ describe('agent model catalog', () => {
     expect(codex[0]?.value).toBe(DEFAULT_MODEL);
     expect(claude.map((m) => m.value)).toContain('claude-opus-4-8');
     expect(codex.map((m) => m.value)).toContain('gpt-5-codex');
+    expect(codex.map((m) => m.value)).toEqual(expect.arrayContaining([
+      'gpt-5.6-sol',
+      'gpt-5.6-terra',
+      'gpt-5.6-luna',
+    ]));
     expect(claude.map((m) => m.value)).not.toContain('gpt-5-codex');
   });
 
@@ -39,6 +45,16 @@ describe('agent model catalog', () => {
     expect(resolveModelArg('claude', undefined)).toBeUndefined();
     // Cross-agent value → no flag rather than a broken model.
     expect(resolveModelArg('codex', 'claude-opus-4-8')).toBeUndefined();
+  });
+
+  it('resolves Codex chat aliases and full model IDs', () => {
+    expect(resolveModelCommandSelection('codex', 'sol')).toBe('gpt-5.6-sol');
+    expect(resolveModelCommandSelection('codex', ' TERRA ')).toBe('gpt-5.6-terra');
+    expect(resolveModelCommandSelection('codex', 'luna')).toBe('gpt-5.6-luna');
+    expect(resolveModelCommandSelection('codex', 'gpt-5.6-sol')).toBe('gpt-5.6-sol');
+    expect(resolveModelCommandSelection('codex', DEFAULT_MODEL)).toBe(DEFAULT_MODEL);
+    expect(resolveModelCommandSelection('codex', 'unknown')).toBeUndefined();
+    expect(resolveModelCommandSelection('claude', 'sol')).toBeUndefined();
   });
 
   it('labels a stored value using the picker option text', () => {

@@ -209,3 +209,35 @@ export async function savePreferencesConfig(
     state.cfg = runtimeProfileConfig(root, state.profile);
   });
 }
+
+/** Persist only the profile-wide model preference and refresh live state. */
+export async function saveModelPreference(
+  state: MutableProfileState,
+  model: string | undefined,
+): Promise<void> {
+  await withConfigFileLock(state.configPath, async () => {
+    const root = await loadRootConfig(state.configPath);
+    if (!root) {
+      const { model: _model, ...preferences } = state.cfg.preferences ?? {};
+      state.cfg.preferences = model ? { ...preferences, model } : preferences;
+      state.profileConfig.preferences = {
+        ...state.profileConfig.preferences,
+        ...(model ? { model } : {}),
+      };
+      if (!model) delete state.profileConfig.preferences.model;
+      await saveConfig(state.cfg, state.configPath);
+      return;
+    }
+
+    const profile = root.profiles[state.profile];
+    if (!profile) throw new Error(`profile not found: ${state.profile}`);
+    const { model: _model, ...preferences } = profile.preferences;
+    root.profiles[state.profile] = {
+      ...profile,
+      preferences: model ? { ...preferences, model } : preferences,
+    };
+    await saveRootConfig(root, state.configPath);
+    state.profileConfig = root.profiles[state.profile]!;
+    state.cfg = runtimeProfileConfig(root, state.profile);
+  });
+}
