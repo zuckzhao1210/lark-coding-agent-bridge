@@ -8,6 +8,7 @@ import { buildAgentProcessEnvironment } from '../../platform/proxy-env';
 import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../../platform/spawn';
 import { buildBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
+import { buildCardInteractionEnv } from '../../card/agent-context';
 import { checkAgentAvailability, type AgentAvailability } from '../preflight';
 import {
   CLAUDE_DEFAULT_PERMISSION_MODE,
@@ -86,7 +87,11 @@ export class ClaudeAdapter implements AgentAdapter {
 
     const child = spawnProcess(this.binary, args, {
       cwd: opts.cwd,
-      env: mergeProcessEnv(buildAgentProcessEnvironment(), buildLarkChannelEnv(this.larkChannel)),
+      env: mergeProcessEnv(buildAgentProcessEnvironment(), {
+        ...buildLarkChannelEnv(this.larkChannel),
+        ...buildCardInteractionEnv(opts.cardInteractionContext),
+        LARK_CHANNEL_RUN_ID: opts.runId,
+      }),
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as ClaudeChild;
 

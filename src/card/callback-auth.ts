@@ -25,12 +25,12 @@ export interface CallbackSignInput {
 }
 
 export interface CallbackVerifyExpected {
-  runId: string;
+  runId?: string;
   scope: string;
   chatId: string;
   operatorOpenId: string;
   action: string;
-  policyFingerprint: string;
+  policyFingerprint?: string;
 }
 
 export interface CallbackPayload {
@@ -135,12 +135,12 @@ function matchesExpected(
   expected: CallbackVerifyExpected,
 ): boolean {
   return (
-    payload.r === expected.runId &&
+    (expected.runId === undefined || payload.r === expected.runId) &&
     payload.s === expected.scope &&
     payload.c === expected.chatId &&
     payload.o === expected.operatorOpenId &&
     payload.a === expected.action &&
-    payload.fp === expected.policyFingerprint
+    (expected.policyFingerprint === undefined || payload.fp === expected.policyFingerprint)
   );
 }
 

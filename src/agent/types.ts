@@ -38,6 +38,8 @@ export interface AgentRunOptions {
   images?: readonly string[];
   sandbox?: CodexSandboxMode;
   permissionMode?: ClaudePermissionMode;
+  /** Non-secret scope capability for interactive CardKit callbacks. */
+  cardInteractionContext?: import('../card/agent-context').CardInteractionContext;
   /**
    * Grace period (ms) between SIGTERM and SIGKILL when stop() is called on
    * the returned run. Lets the agent (and any subprocess it spawned, e.g.

@@ -60,8 +60,27 @@ export function renderCard(state: RunState, options: RunCardRenderOptions = {}):
       streaming_mode: state.terminal === 'running',
       summary: { content: summaryText(state) },
     },
+    header: {
+      title: { tag: 'plain_text', content: headerTitle(state) },
+      template: headerTemplate(state),
+    },
     body: { elements },
   });
+}
+
+function headerTitle(state: RunState): string {
+  if (state.terminal === 'done') return '✅ 任务已完成';
+  if (state.terminal === 'error') return '⚠️ 任务失败';
+  if (state.terminal === 'interrupted') return '⏹ 任务已停止';
+  if (state.terminal === 'idle_timeout') return '⏱ 任务已超时';
+  return '🤖 任务运行中';
+}
+
+function headerTemplate(state: RunState): 'blue' | 'green' | 'red' | 'grey' {
+  if (state.terminal === 'done') return 'green';
+  if (state.terminal === 'error') return 'red';
+  if (state.terminal === 'interrupted' || state.terminal === 'idle_timeout') return 'grey';
+  return 'blue';
 }
 
 function* groupBlocks(blocks: Block[]): Generator<Group> {

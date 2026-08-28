@@ -98,6 +98,13 @@ _运行中…_",
       "content": "正在调用工具",
     },
   },
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "🤖 任务运行中",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -145,6 +152,13 @@ exports[`run card renderer snapshots > collapses consecutive tools while preserv
     "streaming_mode": false,
     "summary": {
       "content": "已完成",
+    },
+  },
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "✅ 任务已完成",
+      "tag": "plain_text",
     },
   },
   "schema": "2.0",
@@ -215,6 +229,13 @@ exports[`run card renderer snapshots > renders active and completed thinking 1`]
       "content": "思考中",
     },
   },
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "🤖 任务运行中",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -266,6 +287,13 @@ exports[`run card renderer snapshots > renders active and completed thinking 2`]
       "content": "已完成",
     },
   },
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "✅ 任务已完成",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -287,6 +315,13 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
       "content": "已完成",
     },
   },
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "✅ 任务已完成",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -306,6 +341,13 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
     "streaming_mode": false,
     "summary": {
       "content": "出错",
+    },
+  },
+  "header": {
+    "template": "red",
+    "title": {
+      "content": "⚠️ 任务失败",
+      "tag": "plain_text",
     },
   },
   "schema": "2.0",
@@ -333,6 +375,13 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
       "content": "已中断",
     },
   },
+  "header": {
+    "template": "grey",
+    "title": {
+      "content": "⏹ 任务已停止",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -356,6 +405,13 @@ exports[`run card renderer snapshots > renders done, error, interrupted, and idl
     "streaming_mode": false,
     "summary": {
       "content": "已超时",
+    },
+  },
+  "header": {
+    "template": "grey",
+    "title": {
+      "content": "⏱ 任务已超时",
+      "tag": "plain_text",
     },
   },
   "schema": "2.0",
@@ -393,6 +449,13 @@ exports[`run card renderer snapshots > renders initial running state 1`] = `
     "streaming_mode": true,
     "summary": {
       "content": "思考中",
+    },
+  },
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "🤖 任务运行中",
+      "tag": "plain_text",
     },
   },
   "schema": "2.0",
@@ -500,6 +563,13 @@ _运行中…_",
       "content": "正在调用工具",
     },
   },
+  "header": {
+    "template": "blue",
+    "title": {
+      "content": "🤖 任务运行中",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -555,6 +625,13 @@ pwd
       "content": "已完成",
     },
   },
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "✅ 任务已完成",
+      "tag": "plain_text",
+    },
+  },
   "schema": "2.0",
 }
 `;
@@ -605,6 +682,13 @@ ENOENT
     "streaming_mode": false,
     "summary": {
       "content": "已完成",
+    },
+  },
+  "header": {
+    "template": "green",
+    "title": {
+      "content": "✅ 任务已完成",
+      "tag": "plain_text",
     },
   },
   "schema": "2.0",

@@ -20,6 +20,7 @@ import { RunRejected, type RunRejectedCode } from '../runtime/errors';
 import type { SessionCatalog } from '../session/catalog';
 import type { SessionStore } from '../session/store';
 import type { WorkspaceStore } from '../workspace/store';
+import type { CardInteractionContext } from '../card/agent-context';
 
 export interface StartRunFlowInput {
   scopeId: string;
@@ -156,6 +157,7 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
               .filter((path): path is string => Boolean(path))
           : undefined,
       stopGraceMs: input.stopGraceMs,
+      cardInteractionContext: cardInteractionContext(input.scopeId, input.scope, policy),
       observability: input.observability,
     });
   } catch (err) {
@@ -183,6 +185,20 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
     policy,
     cwdRealpath: workspace.cwdRealpath,
     ...(resumeFrom ? { resumeFrom } : {}),
+  };
+}
+
+function cardInteractionContext(
+  scope: string,
+  context: ScopeContext,
+  policy: RunPolicyAllow,
+): CardInteractionContext | undefined {
+  if (context.source !== 'im' || !context.chatId || !context.actorId) return undefined;
+  return {
+    scope,
+    chatId: context.chatId,
+    operatorOpenId: context.actorId,
+    policyFingerprint: policy.policyFingerprint,
   };
 }
 

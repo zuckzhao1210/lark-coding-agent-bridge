@@ -16,6 +16,21 @@ describe('run card renderer snapshots', () => {
     expectCard(initialState).toMatchSnapshot();
   });
 
+  it('uses a blue running header and a green completed header', () => {
+    expect(renderCard(initialState)).toMatchObject({
+      header: {
+        title: { tag: 'plain_text', content: '🤖 任务运行中' },
+        template: 'blue',
+      },
+    });
+    expect(renderCard(stateFrom([{ type: 'done', terminationReason: 'normal' }]))).toMatchObject({
+      header: {
+        title: { tag: 'plain_text', content: '✅ 任务已完成' },
+        template: 'green',
+      },
+    });
+  });
+
   it('renders active and completed thinking', () => {
     expectCard(stateFrom([{ type: 'thinking', delta: 'checking options' }])).toMatchSnapshot();
     expectCard(stateFrom([

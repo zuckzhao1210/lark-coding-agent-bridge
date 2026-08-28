@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 2,
+  "activeProfile": "codex",
+  "preferences": {},
+  "migrations": { "permissionDefaultsV1": ["codex"] },
+  "profiles": {
+    "codex": {
+      "schemaVersion": 2,
+      "agentKind": "codex",
+      "mode": "personal",
+      "accounts": { "app": { "id": "cli_aaf76f3106f8dbc1", "secret": "__LARK_APP_SECRET__", "tenant": "feishu" } },
+      "preferences": { "messageReplyMigrated": true, "showToolCalls": true, "cotMessages": "off", "maxConcurrentRuns": 10, "runIdleTimeoutMinutes": 10, "model": "gpt-5.6-sol", "messageReply": "card" },
+      "access": { "allowedUsers": [], "allowedChats": [], "admins": [], "requireMentionInGroup": true },
+      "workspaces": { "default": "__BRIDGE_WORKSPACE__" },
+      "permissions": { "defaultAccess": "full", "maxAccess": "full" },
+      "codex": { "binaryPath": "__CODEX_BINARY__", "inheritCodexHome": true, "ignoreUserConfig": true, "ignoreRules": true },
+      "attachments": { "maxCount": 10, "maxBytes": 104857600, "maxFileBytes": 26214400, "imageMaxBytes": 26214400, "cacheTtlMs": 86400000, "cacheMaxBytes": 536870912 },
+      "comments": {},
+      "meeting": { "enabled": false, "autoJoinOnInvite": false, "transcript": { "keep": 200, "stabilizeMs": 0 }, "respondIn": "meeting", "trigger": "@bot", "pollIntervalMs": 3000, "summaryOnEnd": false, "summaryTarget": "origin" },
+      "larkCli": { "identityPreset": "user-default" }
+    }
+  }
+}

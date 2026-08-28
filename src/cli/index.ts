@@ -24,6 +24,7 @@ import {
   runServiceUnregister,
 } from './commands/service';
 import { runStart } from './commands/start';
+import { runCardSend } from './commands/card';
 import { runUi } from './commands/ui';
 
 const program = new Command();
@@ -220,6 +221,19 @@ program
   .option('--web-ui', 'target the supervisor service instead of a per-profile one')
   .action(async (opts: { profile?: string; webUi?: boolean }) => {
     await runServiceUnregister({ profile: opts.profile, webUi: opts.webUi });
+  });
+
+const card = program
+  .command('card')
+  .description('Send signed CardKit 2.0 cards from a running bridge agent');
+
+card
+  .command('send')
+  .description('Send a CardKit 2.0 JSON card; callback behaviors are signed automatically')
+  .requiredOption('--card <json>', 'CardKit 2.0 JSON')
+  .option('--ttl-minutes <minutes>', 'callback lifetime; default 1440, max 10080')
+  .action(async (opts: { card: string; ttlMinutes?: string }) => {
+    await runCardSend(opts);
   });
 
 const secrets = program

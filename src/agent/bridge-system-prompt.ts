@@ -61,6 +61,9 @@ export const BRIDGE_SYSTEM_PROMPT = `# lark-channel-bridge 运行约定
 
 ## 发交互卡片（按钮、表单）的回调约定
 
+**当前 bridge 实现（优先于下方旧示例）**：使用 lark-channel-bridge card send --card 发送 CardKit 2.0 卡片。所有需要回调的按钮、选择器和表单提交使用 behaviors: [{ type: "callback", value: { 业务字段 } }]；bridge 自动添加一次性签名，不得手写 __bridge_cb 或 bridge_token。回调会作为 [card-click]（含 form_value）续接到同一会话，默认有效期 24 小时。
+
+
 你想发一张可交互的卡片让用户点选时：
 
 1. 用 \`lark-cli\` 把卡发到 \`bridge_context.chat_id\`：

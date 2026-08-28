@@ -389,7 +389,7 @@ describe('markdown stream startup failures', () => {
     ).toBe(false);
   });
 
-  it('sends one dedicated final reply card after progress completes in card mode', async () => {
+  it('updates one progress card with the final answer in card mode', async () => {
     const progressCards: unknown[] = [];
     const h = await createHarness({
       messageReply: 'card',
@@ -412,20 +412,18 @@ describe('markdown stream startup failures', () => {
     await startTestBridge(h);
 
     await h.channel.handlers.message?.(message('om_card_final', 'run'));
-    await waitFor(() => h.channel.sent.length === 1);
+    await waitFor(() => progressCards.some((card) => JSON.stringify(card).includes('FINAL_SENTINEL')));
 
-    // Intermediate agent messages stream as progress; the final answer never
-    // leaks into the progress card (it is held back for the dedicated reply).
-    const progressJson = JSON.stringify(progressCards);
-    expect(progressJson).toContain('progress update');
-    expect(progressJson).not.toContain('FINAL_SENTINEL');
+    // The final answer stays in the existing streaming card, which changes
+    // from its blue running header to the green completed header.
+    const finalCardJson = JSON.stringify(progressCards.at(-1));
+    expect(finalCardJson).toContain('progress update');
+    expect(finalCardJson).toContain('FINAL_SENTINEL');
+    expect(finalCardJson).toContain('任务已完成');
+    expect(finalCardJson).toContain('green');
 
-    // The terminal answer arrives as exactly one non-streaming card send.
-    expect(h.channel.sent).toHaveLength(1);
-    const finalJson = JSON.stringify(h.channel.sent[0]?.content);
-    expect(finalJson).toContain('FINAL_SENTINEL');
-    expect(finalJson).not.toContain('progress update');
-    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_card_final' });
+    // No second non-streaming final card is sent.
+    expect(h.channel.sent).toHaveLength(0);
   });
 });
 

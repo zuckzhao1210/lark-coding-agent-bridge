@@ -205,21 +205,21 @@ function verifyBridgeToken(
 ): boolean {
   const token = typeof payload.bridge_token === 'string' ? payload.bridge_token : '';
   const active = deps.activeRuns.get(scope);
-  if (!deps.callbackAuth || !token || !active) {
+  const requireActiveRun = action !== "agent_callback";
+  if (!deps.callbackAuth || !token || (requireActiveRun && !active)) {
     log.info('cardAction', 'skip-callback-auth-missing', { scope, action });
     log.warn('callback', 'denied', { scope, action, reason: 'missing-token-or-run' });
     return false;
   }
   const result = deps.callbackAuth.verify(token, {
-    runId: active.run.runId,
+    ...(active ? { runId: active.run.runId } : {}),
     scope,
     chatId: deps.evt.chatId,
     operatorOpenId: deps.evt.operator.openId,
     action,
-    policyFingerprint:
-      deps.callbackPolicyFingerprintForScope?.(scope) ??
-      deps.callbackPolicyFingerprint ??
-      '',
+    ...(deps.callbackPolicyFingerprintForScope?.(scope) ?? deps.callbackPolicyFingerprint
+      ? { policyFingerprint: deps.callbackPolicyFingerprintForScope?.(scope) ?? deps.callbackPolicyFingerprint }
+      : {}),
   });
   if (!result.ok) {
     log.info('cardAction', 'skip-callback-auth-failed', {

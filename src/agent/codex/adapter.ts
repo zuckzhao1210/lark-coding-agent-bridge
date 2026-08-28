@@ -8,6 +8,7 @@ import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../..
 import { SpawnFailed } from '../../runtime/errors';
 import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
 import { buildLarkChannelEnv, type LarkChannelEnvContext } from '../lark-channel-env';
+import { buildCardInteractionEnv } from '../../card/agent-context';
 import { checkAgentAvailability, type AgentAvailability } from '../preflight';
 import type {
   AgentAdapter,
@@ -103,7 +104,11 @@ export class CodexAdapter implements AgentAdapter {
       ignoreRules: this.ignoreRules,
       model: opts.model,
     });
-    const envOverrides: NodeJS.ProcessEnv = buildLarkChannelEnv(this.larkChannel);
+    const envOverrides: NodeJS.ProcessEnv = {
+      ...buildLarkChannelEnv(this.larkChannel),
+      ...buildCardInteractionEnv(opts.cardInteractionContext),
+      LARK_CHANNEL_RUN_ID: opts.runId,
+    };
     if (this.codexHome) {
       envOverrides.CODEX_HOME = this.codexHome;
     } else if (!this.inheritCodexHome) {

@@ -27,6 +27,16 @@
 
 ## 安装
 
+### 迁移当前“小爱童鞋”配置到另一台机器
+
+仓库的 `deploy/lark-channel/config.template.json` 包含当前 Codex profile 和 CardKit 设置，但不包含 App Secret、OAuth 登录态或会话数据。目标机安装 Node.js、pnpm、Codex CLI、lark-cli 后，执行：
+
+```bash
+LARK_APP_SECRET="你的 App Secret" ./deploy/install-bridge.sh
+```
+
+脚本会以权限 0600 在目标机创建 `~/.lark-channel/config.json`，构建当前二次开发版本并启动机器人。详细说明见 `deploy/lark-channel/README.md`。
+
 ```bash
 npm i -g lark-channel-bridge
 # 或

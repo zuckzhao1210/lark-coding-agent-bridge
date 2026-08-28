@@ -1140,7 +1140,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
                 producerStarted = true;
                 if (progress.abandoned()) return;
                 cardCtrl = ctrl;
-                await ctrl.update(renderCard(filterForPrefs(latestState), cardRenderOptions));
+                await ctrl.update(renderCard(materializeFinalText(filterForPrefs(latestState)), cardRenderOptions));
                 await renderDone;
               },
             },
@@ -1156,9 +1156,10 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         recordSession,
         async (state) => {
           latestState = state;
-          if (shouldOpenProgressStream(filterForPrefs(state))) progress.ensureOpen();
+          const displayState = materializeFinalText(filterForPrefs(state));
+          if (shouldOpenProgressStream(displayState)) progress.ensureOpen();
           if (cardCtrl) {
-            await cardCtrl.update(renderCard(filterForPrefs(state), cardRenderOptions));
+            await cardCtrl.update(renderCard(displayState, cardRenderOptions));
           }
         },
       );
@@ -1182,13 +1183,17 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         if (controls.profileConfig.agentKind !== 'codex') throw err;
         log.fail('stream', err, { mode: replyMode, step: 'progress-stream' });
       }
-      await recallIfEmptyStreamedReply(channel, progress, filterForPrefs(latestState), scope);
-      if (controls.profileConfig.agentKind === 'codex') {
+      const completedState = materializeFinalText(filterForPrefs(latestState));
+      await recallIfEmptyStreamedReply(channel, progress, completedState, scope);
+      // Codex can emit streamed progress and a dedicated final_text. Render
+      // that final text into the same live card, instead of posting a second
+      // final card after the stream has completed.
+      if (controls.profileConfig.agentKind === 'codex' && (!progress.opened() || progress.abandoned() || !cardCtrl)) {
         await sendFinalReply({
           channel,
           chatId,
           scope,
-          state: finalReplyState(progress, filterForPrefs(latestState)),
+          state: completedState,
           replyMode,
           sendOpts,
           cardRenderOptions,
@@ -1366,24 +1371,23 @@ function shouldOpenProgressStream(state: RunState): boolean {
   return renderText({ ...state, footer: null }).trim() !== '';
 }
 
-/**
- * What Codex's dedicated final reply may carry, given what the progress stream
- * already put on screen.
- *
- * `finalAnswerOnlyState` falls back to the run's text blocks when Codex held
- * nothing back for the end — correct where nothing was streamed (CoT, text
- * mode, a stream we gave up on), but those blocks are already visible once a
- * stream rendered them, and repeating them posts the same words a second time.
- * Codex leaves the answer in `blocks` more often than it looks: any abnormal
- * turn end (`turn.failed`, or the process exiting before `turn.completed`)
- * flushes the pending message as text instead of `final_text`.
- *
- * Terminal notices are dropped for the same reason — the stream rendered them.
- */
+/** Move Codex's dedicated final_text into the visible card body exactly once. */
+function materializeFinalText(state: RunState): RunState {
+  const finalText = state.finalText?.trim();
+  if (!finalText) return state;
+  return {
+    ...state,
+    finalText: undefined,
+    blocks: [...state.blocks, { kind: 'text', content: finalText, streaming: false }],
+  };
+}
+
+/** Build a standalone final reply for Markdown replies that already streamed progress. */
 function finalReplyState(progress: LazyProgressStream, state: RunState): RunState {
   if (!progress.opened() || progress.abandoned()) return finalAnswerOnlyState(state);
   return {
     ...state,
+    finalText: undefined,
     blocks: state.finalText ? [{ kind: 'text', content: state.finalText, streaming: false }] : [],
     reasoning: { content: '', active: false },
     footer: null,

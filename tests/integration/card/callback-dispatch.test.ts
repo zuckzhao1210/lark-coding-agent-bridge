@@ -45,11 +45,8 @@ describe('signed card callback dispatch', () => {
     expect(deniedRun.stopped).toBe(false);
   });
 
-  it('forwards signed bridge callbacks without leaking auth fields into the agent payload', async () => {
+  it('forwards signed bridge callbacks after the original run has completed without leaking auth fields', async () => {
     const h = await createHarness();
-    const activeRun = h.agent.run({ runId: 'run-active', prompt: 'running' });
-    h.activeRuns.register('oc_group', activeRun);
-
     await h.dispatch(
       {
         __bridge_cb: true,
