@@ -271,6 +271,10 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
 
   const channel = createLarkChannel(opts);
   const media = new MediaCache(channel, deps.appPaths?.mediaDir);
+  // Acknowledge Codex requests at intake, before debounce/context loading or
+  // process startup. The promise is retained until the associated batch has
+  // finished so the reaction can be removed even when setup fails early.
+  const workingReactions = new Map<string, Promise<string | undefined>>();
 
   // Pending → run handoff: while a run is active on a chat, block its pending
   // queue so messages keep accumulating without flushing. When the run ends,
@@ -323,6 +327,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
       } catch (err) {
         log.fail('flush', err);
       } finally {
+        cleanupWorkingReactions(channel, batch, workingReactions);
         pending.unblock(scope);
         log.info('flush', 'end');
       }
@@ -349,8 +354,15 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
           logThreadModeOverride,
           executor,
           pool,
+          workingReactions,
         }),
-      ).catch((err) => log.fail('intake', err));
+      ).catch((err) => {
+        // Intake can still fail before the message reaches the pending queue
+        // (for example, a chat-mode lookup timeout). Do not leave its early
+        // acknowledgement reaction behind in that case.
+        cleanupWorkingReaction(channel, msg.messageId, workingReactions);
+        log.fail('intake', err);
+      });
     },
     reject: (evt) => {
       log.info('intake', 'reject', { chatId: evt.chatId, reason: evt.reason });
@@ -625,6 +637,7 @@ interface IntakeDeps {
   logThreadModeOverride: LogThreadModeOverride;
   executor: RunExecutor;
   pool: ProcessPool;
+  workingReactions: Map<string, Promise<string | undefined>>;
 }
 
 type LogThreadModeOverride = (input: {
@@ -648,7 +661,14 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     logThreadModeOverride,
     executor,
     pool,
+    workingReactions,
   } = deps;
+  // Do this before any potentially slow API lookup. In particular, card mode
+  // deliberately waits to create a streaming card until Codex emits visible
+  // output, which used to leave users without any immediate acknowledgement.
+  if (controls.profileConfig.agentKind === 'codex' && !workingReactions.has(msg.messageId)) {
+    workingReactions.set(msg.messageId, addWorkingReaction(channel, msg.messageId));
+  }
   const preview = msg.content.length > 80 ? `${msg.content.slice(0, 80)}…` : msg.content;
   // Resolve scope (and underlying chat mode) once at intake — every
   // downstream consumer keys off these.
@@ -717,6 +737,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
         log.warn('intake', 'non-allowed-hint-failed', { err: String(err) }),
       );
     }
+    cleanupWorkingReaction(channel, msg.messageId, workingReactions);
     return;
   }
 
@@ -735,6 +756,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     !msg.mentionedBot
   ) {
     log.info('intake', 'skip-no-mention', { scope, chatType: msg.chatType });
+    cleanupWorkingReaction(channel, msg.messageId, workingReactions);
     return;
   }
 
@@ -752,6 +774,7 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
     await sendForwardFetchFailedHint(channel, emsg.chatId, emsg.messageId).catch((err) =>
       log.warn('intake', 'forward-fetch-failed-hint-failed', { err: String(err) }),
     );
+    cleanupWorkingReaction(channel, msg.messageId, workingReactions);
     return;
   }
 
@@ -780,6 +803,8 @@ async function intakeMessage(deps: IntakeDeps): Promise<void> {
   if (handled) {
     const dropped = pending.cancel(scope);
     log.info('intake', 'command', { scope, droppedPending: dropped.length });
+    cleanupWorkingReaction(channel, msg.messageId, workingReactions);
+    cleanupWorkingReactions(channel, dropped, workingReactions);
     return;
   }
 
@@ -1071,7 +1096,9 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   // Add a "Typing" reaction to the triggering message as an instant ack, but
   // never let that outbound API call block agent event draining.
   const reactionPromise =
-    cotEnabled || replyMode === 'card' ? undefined : addWorkingReaction(channel, lastMsg.messageId);
+    controls.profileConfig.agentKind === 'codex' || cotEnabled || replyMode === 'card'
+      ? undefined
+      : addWorkingReaction(channel, lastMsg.messageId);
 
   try {
     if (cotEnabled) {
@@ -1798,6 +1825,29 @@ function scheduleWorkingReactionCleanup(
     if (!settled.ok || !settled.reactionId) return;
     await removeReaction(channel, messageId, settled.reactionId);
   })();
+}
+
+/** Release all intake reactions after their eventual batch has produced (or
+ * failed to produce) its reply. This also covers messages merged by debounce. */
+function cleanupWorkingReactions(
+  channel: LarkChannel,
+  messages: readonly NormalizedMessage[],
+  reactions: Map<string, Promise<string | undefined>>,
+): void {
+  for (const message of messages) {
+    cleanupWorkingReaction(channel, message.messageId, reactions);
+  }
+}
+
+function cleanupWorkingReaction(
+  channel: LarkChannel,
+  messageId: string,
+  reactions: Map<string, Promise<string | undefined>>,
+): void {
+  const reactionPromise = reactions.get(messageId);
+  if (!reactionPromise) return;
+  reactions.delete(messageId);
+  scheduleWorkingReactionCleanup(channel, messageId, reactionPromise);
 }
 
 function delay(ms: number): Promise<void> {

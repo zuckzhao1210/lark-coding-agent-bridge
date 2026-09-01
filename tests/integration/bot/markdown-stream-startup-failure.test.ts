@@ -82,6 +82,29 @@ afterEach(async () => {
 });
 
 describe('markdown stream startup failures', () => {
+  it('adds Codex busy feedback immediately, before the debounce creates a card', async () => {
+    const h = await createHarness({ messageReply: 'card' });
+    await startTestBridge(h);
+
+    const intake = h.channel.handlers.message?.(message('om_first', 'first'));
+
+    await waitFor(
+      () => h.channel.rawClient.im.v1.messageReaction.create.mock.calls.length === 1,
+      200,
+    );
+    expect(h.channel.rawClient.im.v1.messageReaction.create).toHaveBeenCalledWith({
+      path: { message_id: 'om_first' },
+      data: { reaction_type: { emoji_type: 'Typing' } },
+    });
+    // The 600ms message coalescing window has not elapsed yet, so no Codex
+    // process (and therefore no streaming card) can have been started.
+    expect(h.agent.runOptions).toHaveLength(0);
+
+    await intake;
+    await waitFor(() => h.agent.runOptions.length === 1);
+    await waitFor(() => h.channel.rawClient.im.v1.messageReaction.delete.mock.calls.length === 1);
+  });
+
   it('does not leave the IM queue blocked when the agent exits before stream producer starts', async () => {
     const h = await createHarness();
     await startTestBridge(h);
