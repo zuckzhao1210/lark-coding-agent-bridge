@@ -41,7 +41,7 @@ import {
   type ProfileAccess,
   type ProfileMode,
 } from '../config/profile-schema';
-import { DEFAULT_MODEL, normalizeModelSelection, supportedModels } from '../agent/models';
+import { DEFAULT_MODEL, profileModelHome, normalizeModelSelection, supportedModels } from '../agent/models';
 import { log } from '../core/logger';
 import { HttpError } from './http';
 import type { UiRuntime } from './types';
@@ -83,8 +83,8 @@ export function buildConfigView(state: MutableProfileState, live = false): Confi
     profile: state.profile,
     agentKind,
     mode: state.profileConfig.mode,
-    model: normalizeModelSelection(agentKind, state.cfg.preferences?.model),
-    models: supportedModels(agentKind),
+    model: normalizeModelSelection(agentKind, state.cfg.preferences?.model, profileModelHome(state)),
+    models: supportedModels(agentKind, profileModelHome(state)),
     messageReply: getMessageReplyMode(state.cfg),
     showToolCalls: getShowToolCalls(state.cfg),
     cotMessages: getCotMessages(state.cfg),
@@ -213,10 +213,10 @@ function parseConfigBody(state: MutableProfileState, body: unknown): ParsedConfi
       : state.profileConfig.larkCli.identityPreset;
 
   const rawModel = typeof fv.model === 'string' ? fv.model : '';
-  const modelValid = rawModel !== '' && supportedModels(agentKind).some((m) => m.value === rawModel);
+  const modelValid = rawModel !== '' && supportedModels(agentKind, profileModelHome(state)).some((m) => m.value === rawModel);
   const modelSelection = modelValid
     ? rawModel
-    : normalizeModelSelection(agentKind, state.cfg.preferences?.model);
+    : normalizeModelSelection(agentKind, state.cfg.preferences?.model, profileModelHome(state));
   const model = modelSelection === DEFAULT_MODEL ? undefined : modelSelection;
 
   const messageReply: MessageReplyMode =

@@ -32,6 +32,7 @@ interface Harness {
   activeRuns: ActiveRuns;
   agent: ReturnType<typeof createFakeAgent>;
   controls: Controls;
+  codexUsageProvider: NonNullable<CommandContext['codexUsageProvider']>;
   run(content: string, overrides?: RunOverrides): Promise<boolean>;
 }
 
@@ -242,6 +243,39 @@ describe('Bridge command contracts', () => {
     expect(status).toContain(jsonStringFragment(await realpath(h.tmp.workspace)));
   });
 
+  it('shows Codex usage in p2p and keeps group usage details in a DM', async () => {
+    const h = await createHarness('codex');
+
+    await expect(h.run('/usage')).resolves.toBe(true);
+
+    expect(h.codexUsageProvider).toHaveBeenCalledWith(expect.objectContaining({
+      binary: 'codex',
+      codexHome: join(h.tmp.root, 'profiles', 'codex', 'codex-home'),
+    }));
+    expect(lastMarkdown(h.channel)).toContain('Codex 用量');
+    expect(lastMarkdown(h.channel)).toContain('5 小时窗口');
+    expect(lastMarkdown(h.channel)).toContain('账户累计 tokens：1,234,567');
+
+    await expect(h.run('/usage', {
+      chatMode: 'group',
+      senderId: 'ou-member',
+    })).resolves.toBe(true);
+
+    const directMessage = h.channel.sent.at(-2);
+    expect(directMessage?.chatId).toBe('ou-member');
+    expect((directMessage?.content as { markdown?: string }).markdown).toContain('Codex 用量');
+    expect(lastMarkdown(h.channel)).toContain('已私信发送');
+  });
+
+  it('explains that /usage is unavailable for Claude profiles', async () => {
+    const h = await createHarness('claude');
+
+    await expect(h.run('/usage')).resolves.toBe(true);
+
+    expect(lastMarkdown(h.channel)).toContain('仅支持 Codex');
+    expect(h.codexUsageProvider).not.toHaveBeenCalled();
+  });
+
   it('shows workspace paths in group-visible /status replies', async () => {
     const h = await createHarness();
 
@@ -266,8 +300,12 @@ describe('Bridge command contracts', () => {
     const h = await createHarness('codex');
 
     await expect(h.run('/model')).resolves.toBe(true);
-    expect(lastMarkdown(h.channel)).toContain('/model sol');
-    expect(lastMarkdown(h.channel)).toContain('跟随默认');
+    expect(JSON.stringify(lastContent(h.channel))).toContain('model.select');
+    expect(JSON.stringify(lastContent(h.channel))).toContain('gpt-6-astra');
+    expect(JSON.stringify(lastContent(h.channel))).toContain('跟随默认');
+
+    await expect(h.run('/model astra')).resolves.toBe(true);
+    expect(h.controls.profileConfig.preferences.model).toBe('gpt-6-astra');
 
     await expect(h.run('/model SOL')).resolves.toBe(true);
     expect(lastMarkdown(h.channel)).toContain('GPT-5.6 Sol');
@@ -290,6 +328,30 @@ describe('Bridge command contracts', () => {
 
     await expect(h.run('/model terra', { senderId: 'ou-not-admin' })).resolves.toBe(true);
     expect(lastMarkdown(h.channel)).toContain('仅管理员可用');
+  });
+
+  it('uses the profile CLI cache for the model card, config form, and command validation', async () => {
+    const h = await createHarness('codex');
+    h.controls.profileConfig.codex!.codexHome = h.tmp.root;
+    await writeFile(join(h.tmp.root, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'gpt-5.5', display_name: 'GPT-5.5', visibility: 'list', priority: 12 },
+      { slug: 'gpt-5.3-codex-spark', display_name: 'GPT-5.3-Codex-Spark', visibility: 'list', priority: 26, supported_in_api: false },
+      { slug: 'hidden-model', visibility: 'hide' },
+    ] }));
+    await saveRootConfig(createRootConfig('codex', h.controls.profileConfig), h.controls.configPath);
+    await h.run('/model');
+    const picker = JSON.stringify(lastContent(h.channel));
+    expect(picker).toContain('gpt-5.5');
+    expect(picker).toContain('gpt-5.3-codex-spark');
+    expect(picker).not.toContain('hidden-model');
+    expect(picker).not.toContain('gpt-6-astra');
+    await h.run('/model gpt-5.5');
+    expect(h.controls.profileConfig.preferences.model).toBe('gpt-5.5');
+    await h.run('/config');
+    expect(JSON.stringify(lastContent(h.channel))).toContain('gpt-5.5');
+    expect(JSON.stringify(lastContent(h.channel))).not.toContain('hidden-model');
+    await h.run('/model spark');
+    expect((await loadRootConfig(h.controls.configPath))?.profiles.codex?.preferences.model).toBe('gpt-5.3-codex-spark');
   });
 
   it('does not expose access allowlists through the Lark /config form', async () => {
@@ -373,6 +435,14 @@ async function createHarness(agentKind: AgentKind = 'claude'): Promise<Harness> 
   } satisfies Controls;
 
   workspaces.setCwd('chat-1', workspaceRealpath);
+  const codexUsageProvider = vi.fn(async () => ({
+    rateLimits: [{
+      planType: 'team',
+      primary: { usedPercent: 42, windowDurationMins: 300, resetsAt: 1_800_000_000 },
+    }],
+    tokenSummary: { lifetimeTokens: 1_234_567 },
+    unavailable: [],
+  }));
 
   const run = (content: string, overrides: RunOverrides = {}): Promise<boolean> => {
     const chatId = overrides.chatId ?? 'chat-1';
@@ -391,6 +461,7 @@ async function createHarness(agentKind: AgentKind = 'claude'): Promise<Harness> 
       agent,
       activeRuns,
       controls,
+      codexUsageProvider,
     });
   };
 
@@ -399,7 +470,17 @@ async function createHarness(agentKind: AgentKind = 'claude'): Promise<Harness> 
     await tmp.cleanup();
   });
 
-  return { tmp, channel, sessions, workspaces, activeRuns, agent, controls, run };
+  return {
+    tmp,
+    channel,
+    sessions,
+    workspaces,
+    activeRuns,
+    agent,
+    controls,
+    codexUsageProvider,
+    run,
+  };
 }
 
 function appConfig(defaultWorkspace: string, agentKind: AgentKind): ProfileConfig {
@@ -409,7 +490,7 @@ function appConfig(defaultWorkspace: string, agentKind: AgentKind): ProfileConfi
     access: { admins: ['ou-admin'] },
     sandbox: { defaultMode: 'read-only', maxMode: 'workspace-write' },
     preferences: { maxConcurrentRuns: 2 },
-    ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex' } } : {}),
+    ...(agentKind === 'codex' ? { codex: { binaryPath: 'codex', inheritCodexHome: false } } : {}),
   });
   config.workspaces.default = defaultWorkspace;
   return config;

@@ -1,5 +1,5 @@
 import type { AgentCapability } from '../agent/capability';
-import { resolveModelArg } from '../agent/models';
+import { resolveModelArg, resolveReasoningEffortArg } from '../agent/models';
 import type { AgentEvent } from '../agent/types';
 import type { ProfileConfig } from '../config/profile-schema';
 import type { AccessDecision } from '../policy/access';
@@ -30,6 +30,7 @@ export interface StartRunFlowInput {
   access: AccessDecision;
   capability: AgentCapability;
   profileConfig: ProfileConfig;
+  modelCatalogHome?: string;
   sessions: SessionStore;
   sessionCatalog?: SessionCatalog;
   workspaces: WorkspaceStore;
@@ -148,6 +149,13 @@ export async function startRunFlow(input: StartRunFlowInput): Promise<StartRunFl
       model: resolveModelArg(
         input.profileConfig.agentKind,
         input.profileConfig.preferences.model,
+        input.modelCatalogHome ?? input.profileConfig.codex?.codexHome,
+      ),
+      reasoningEffort: resolveReasoningEffortArg(
+        input.profileConfig.agentKind,
+        input.profileConfig.preferences.model,
+        input.profileConfig.preferences.reasoningEffort,
+        input.modelCatalogHome ?? input.profileConfig.codex?.codexHome,
       ),
       images:
         input.capability.agentId === 'codex'

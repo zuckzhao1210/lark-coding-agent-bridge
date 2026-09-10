@@ -1,10 +1,15 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import type { CardActionEvent } from '@larksuite/channel';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ActiveRuns } from '../../../src/bot/active-runs.js';
 import type { ChatModeCache } from '../../../src/bot/chat-mode-cache.js';
 import { PendingQueue } from '../../../src/bot/pending-queue.js';
 import { CallbackAuth } from '../../../src/card/callback-auth.js';
 import { CallbackNonceStore } from '../../../src/card/callback-store.js';
+import { modelCard } from '../../../src/card/model-card.js';
+import { sendManagedCard } from '../../../src/card/managed.js';
+import { createRootConfig, loadRootConfig, saveRootConfig } from '../../../src/config/profile-store.js';
 import { handleCardAction } from '../../../src/card/dispatcher.js';
 import type { Controls } from '../../../src/commands/index.js';
 import { createDefaultProfileConfig } from '../../../src/config/profile-schema.js';
@@ -19,6 +24,100 @@ const cleanups: Array<() => Promise<void>> = [];
 describe('signed card callback dispatch', () => {
   afterEach(async () => {
     await Promise.all(cleanups.splice(0).map((cleanup) => cleanup()));
+  });
+
+  it('switches models from card buttons, persists defaults, and checks admin access', async () => {
+    const h = await createHarness();
+    h.controls.profileConfig.agentKind = 'codex';
+    h.controls.profileConfig.codex = { binaryPath: 'codex', inheritCodexHome: false };
+    await saveRootConfig(createRootConfig('claude', h.controls.profileConfig), h.controls.configPath);
+    const channel = h.channel as unknown as Parameters<typeof sendManagedCard>[0];
+    const card = modelCard('codex', undefined) as {
+      body: { elements: Array<{ behaviors?: Array<{ value: Record<string, unknown> }> }> };
+    };
+    const astra = card.body.elements.flatMap((el) => el.behaviors ?? [])
+      .find((behavior) => behavior.value.arg === 'gpt-6-astra')!.value;
+    await sendManagedCard(channel, 'oc_group', card);
+
+    // A group member can see the card but cannot change profile settings.
+    await h.dispatch(astra);
+    expect(h.controls.profileConfig.preferences.model).toBeUndefined();
+
+    h.controls.profileConfig.access.admins = ['ou_operator'];
+    await saveRootConfig(createRootConfig('claude', h.controls.profileConfig), h.controls.configPath);
+    await h.dispatch(astra);
+    expect(h.controls.profileConfig.preferences.model).toBe('gpt-6-astra');
+    expect((await loadRootConfig(h.controls.configPath))?.profiles.claude?.preferences.model).toBe('gpt-6-astra');
+    const updates = () => h.channel.rawClient.requests.filter((request) => request.method === 'cardkit.v1.card.update');
+    expect(updates()).toHaveLength(0); // The callback must return before updating the card.
+    await vi.waitFor(() => expect(updates()).toHaveLength(1), { timeout: 2000 });
+    expect(JSON.stringify(updates())).toContain('✓ GPT-6 Astra');
+
+
+    await h.dispatch({ cmd: 'model.select', arg: 'unsupported' });
+    expect(h.controls.profileConfig.preferences.model).toBe('gpt-6-astra');
+    await h.dispatch({ cmd: 'model.select', arg: 'sol' });
+    await h.dispatch({ cmd: 'model.select', arg: 'default' });
+    expect(h.controls.profileConfig.preferences.model).toBeUndefined();
+    expect((await loadRootConfig(h.controls.configPath))?.profiles.claude?.preferences).not.toHaveProperty('model');
+    await vi.waitFor(() => expect(updates()).toHaveLength(2), { timeout: 2000 });
+    const latest = JSON.stringify(updates().at(-1));
+    expect(latest).toContain('✓ 跟随默认');
+    expect(latest).not.toContain('✓ GPT-6 Astra');
+    expect(latest).not.toContain('✓ GPT-5.6 Sol');
+
+    // Clicking an already-selected model still repairs an old card's highlight.
+    await h.dispatch({ cmd: 'model.select', arg: 'default' });
+    await vi.waitFor(() => expect(updates()).toHaveLength(3), { timeout: 2000 });
+    expect(JSON.stringify(updates().at(-1))).toContain('✓ 跟随默认');
+
+  });
+
+  it('persists effort clicks, rejects stale/unsupported choices, and refreshes highlights', async () => {
+    const h = await createHarness();
+    h.controls.profileConfig.agentKind = 'codex';
+    h.controls.profileConfig.codex = { binaryPath: 'codex', codexHome: h.tmp.root };
+    h.controls.profileConfig.preferences.model = 'model-a';
+    await writeFile(join(h.tmp.root, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'model-a', visibility: 'list', default_reasoning_level: 'high', supported_reasoning_levels: [
+        { effort: 'high' }, { effort: 'ultra' },
+      ] },
+      { slug: 'model-b', visibility: 'list', default_reasoning_level: 'medium', supported_reasoning_levels: [
+        { effort: 'medium' }, { effort: 'high' },
+      ] },
+    ] }));
+    await saveRootConfig(createRootConfig('claude', h.controls.profileConfig), h.controls.configPath);
+    const channel = h.channel as unknown as Parameters<typeof sendManagedCard>[0];
+    const card = modelCard('codex', 'model-a', false, h.tmp.root) as {
+      body: { elements: Array<{ behaviors?: Array<{ value: Record<string, unknown> }> }> };
+    };
+    const click = card.body.elements.flatMap((element) => element.behaviors ?? [])
+      .find((behavior) => behavior.value.arg === 'model-a ultra')!.value;
+    await sendManagedCard(channel, 'oc_group', card);
+    await h.dispatch(click);
+    expect(h.controls.profileConfig.preferences.reasoningEffort).toBeUndefined();
+    h.controls.profileConfig.access.admins = ['ou_operator'];
+    await saveRootConfig(createRootConfig('claude', h.controls.profileConfig), h.controls.configPath);
+    await h.dispatch(click);
+    expect((await loadRootConfig(h.controls.configPath))?.profiles.claude?.preferences.reasoningEffort).toBe('ultra');
+    const updates = () => h.channel.rawClient.requests.filter((request) => request.method === 'cardkit.v1.card.update');
+    expect(updates()).toHaveLength(0);
+    await vi.waitFor(() => expect(JSON.stringify(updates())).toContain('✓ ultra'), { timeout: 2000 });
+
+    await h.dispatch({ cmd: 'model.select', arg: 'model-b' });
+    expect(h.controls.profileConfig.preferences.reasoningEffort).toBe('medium');
+    await h.dispatch(click); // An old model-a button must not apply to model-b.
+    expect(h.controls.profileConfig.preferences.reasoningEffort).toBe('medium');
+    await h.dispatch({ cmd: 'model.effort', arg: 'model-b ultra' });
+    expect(h.controls.profileConfig.preferences.reasoningEffort).toBe('medium');
+    await h.dispatch({ cmd: 'model.effort', arg: 'model-b high' });
+    expect(h.controls.profileConfig.preferences.reasoningEffort).toBe('high');
+    await vi.waitFor(() => expect(JSON.stringify(updates().at(-1))).toContain('✓ high'), { timeout: 2000 });
+    expect(JSON.stringify(updates().at(-1))).not.toContain('model-b ultra');
+
+    await h.dispatch({ cmd: 'model.effort', arg: 'model-b default' });
+    expect((await loadRootConfig(h.controls.configPath))?.profiles.claude?.preferences).not.toHaveProperty('reasoningEffort');
+    await vi.waitFor(() => expect(JSON.stringify(updates().at(-1))).toContain('✓ 跟随 CLI 默认'), { timeout: 2000 });
   });
 
   it('runs built-in command callbacks only when the bridge token verifies', async () => {
@@ -82,7 +181,7 @@ describe('signed card callback dispatch', () => {
     // compose the `${chatId}:${threadId}` scope. A regression here (e.g. using
     // channel.fetchMessage, whose normalized shape drops thread_id) would fall
     // back to the bare chatId and route the click into the wrong session.
-    h.channel.rawThreadIds.set('om_card', 'th_topic');
+    h.channel.rawThreadIds.set('om_fake_1', 'th_topic');
     h.activeRuns.register('oc_group:th_topic', h.agent.run({ runId: 'run-active', prompt: 'running' }));
 
     await h.dispatch({
@@ -222,7 +321,7 @@ function cardEvent(
   return {
     action: { value },
     chatId: 'oc_group',
-    messageId: 'om_card',
+    messageId: 'om_fake_1',
     operator: {
       openId: 'ou_operator',
       name: 'Operator',

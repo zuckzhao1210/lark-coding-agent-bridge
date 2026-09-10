@@ -48,6 +48,8 @@ export class CodexAdapter implements AgentAdapter {
   private readonly defaultStopGraceMs: number;
   private readonly larkChannel: LarkChannelEnvContext | undefined;
   private botIdentity: AgentBotIdentity | undefined;
+  private availableUntil = 0;
+  private pendingPreparation: Promise<void> | undefined;
 
   constructor(opts: CodexAdapterOptions) {
     this.binary = opts.binary;
@@ -70,24 +72,33 @@ export class CodexAdapter implements AgentAdapter {
   }
 
   async checkAvailability(): Promise<AgentAvailability> {
-    return checkAgentAvailability({
+    const availability = await checkAgentAvailability({
       agentId: 'codex',
       agentName: 'Codex CLI',
       command: this.binary,
       binaryPath: this.binary,
     });
+    this.availableUntil = availability.ok ? Date.now() + 30_000 : 0;
+    return availability;
   }
 
   async prepareRun(): Promise<void> {
-    const availability = await this.checkAvailability();
-    if (!availability.ok) {
-      throw new SpawnFailed(
-        'codex binary check failed',
-        availability.error,
-        availability.diagnostic.code,
-        availability.diagnostic,
-      );
+    // Reuse only successful checks, sharing one probe across concurrent chats.
+    // Explicit diagnostics still call checkAvailability() and always probe.
+    if (Date.now() < this.availableUntil) return;
+    if (!this.pendingPreparation) {
+      this.pendingPreparation = this.checkAvailability().then((availability) => {
+        if (!availability.ok) {
+          throw new SpawnFailed(
+            'codex binary check failed',
+            availability.error,
+            availability.diagnostic.code,
+            availability.diagnostic,
+          );
+        }
+      }).finally(() => { this.pendingPreparation = undefined; });
     }
+    await this.pendingPreparation;
   }
 
   run(opts: AgentRunOptions): AgentRun {
@@ -103,6 +114,7 @@ export class CodexAdapter implements AgentAdapter {
       ignoreUserConfig: this.ignoreUserConfig,
       ignoreRules: this.ignoreRules,
       model: opts.model,
+      reasoningEffort: opts.reasoningEffort,
     });
     const envOverrides: NodeJS.ProcessEnv = {
       ...buildLarkChannelEnv(this.larkChannel),
@@ -120,13 +132,16 @@ export class CodexAdapter implements AgentAdapter {
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as CodexChild;
 
+    const fullPrompt = prefixBridgeSystemPrompt(opts.prompt, this.botIdentity);
     log.info('agent', 'spawn', {
       pid: child.pid ?? null,
       cwd: opts.cwd,
       hasThread: Boolean(opts.threadId),
-      promptChars: opts.prompt.length,
+      promptChars: fullPrompt.length,
+      bridgePromptChars: fullPrompt.length - opts.prompt.length,
       images: opts.images?.length ?? 0,
       model: opts.model,
+      reasoningEffort: opts.reasoningEffort,
     });
 
     const stderrChunks: Buffer[] = [];
@@ -151,15 +166,17 @@ export class CodexAdapter implements AgentAdapter {
 
     let stopReason: CodexFinishReason | undefined;
     child.on('error', (err) => {
+      this.availableUntil = 0;
       runtimeError = err;
     });
     child.on('exit', (code, signal) => {
+      if (code !== 0) this.availableUntil = 0;
       log.info('agent', 'exit', { pid: child.pid ?? null, code, signal });
     });
     child.stdin.on('error', (err) => {
       log.warn('agent', 'stdin-error', { message: err.message });
     });
-    child.stdin.end(prefixBridgeSystemPrompt(opts.prompt, this.botIdentity), 'utf8');
+    child.stdin.end(fullPrompt, 'utf8');
 
     const stopGraceMs = opts.stopGraceMs ?? this.defaultStopGraceMs;
 

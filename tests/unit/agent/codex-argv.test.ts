@@ -108,6 +108,16 @@ describe('Codex argv contract', () => {
     ]);
   });
 
+  it.each([undefined, 'thread-123'])('forwards reasoning effort for fresh and resumed runs (%s)', (threadId) => {
+    const args = buildCodexArgs({ cwd: '/repo', sandbox: 'workspace-write', threadId, reasoningEffort: 'ultra' });
+    const index = args.indexOf('model_reasoning_effort="ultra"');
+    expect(index).toBeGreaterThan(0);
+    expect(args[index - 1]).toBe('-c');
+    if (threadId) expect(index).toBeLessThan(args.indexOf('resume'));
+    expect(buildCodexArgs({ cwd: '/repo', sandbox: 'workspace-write', threadId })
+      .some((arg) => arg.startsWith('model_reasoning_effort='))).toBe(false);
+  });
+
   it('forwards the selected model as a global --model flag before resume', () => {
     const args = buildCodexArgs({
       cwd: '/repo',

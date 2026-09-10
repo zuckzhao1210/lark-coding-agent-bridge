@@ -6,7 +6,7 @@ import type {
 import { createLarkChannel } from '@larksuite/channel';
 import { dirname, join } from 'node:path';
 import { claudeCapability, codexCapability } from '../agent/capability';
-import { modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
+import { profileModelHome, modelLabel, normalizeModelSelection, resolveModelArg } from '../agent/models';
 import {
   buildAgentPrompt,
   type BridgePromptInteractiveCard,
@@ -75,16 +75,10 @@ import {
   finalAnswerOnlyState,
 } from './cot';
 
-const DEBOUNCE_MS = 600;
+const DEBOUNCE_MS = 250;
 const STREAM_TERMINAL_GRACE_MS = 3000;
 const REACTION_CLEANUP_GRACE_MS = 1000;
-
-const BRIDGE_AGENT_INSTRUCTIONS = [
-  '你在 bridge 进程中运行，普通 lark-cli 会继承 LARK_CHANNEL=1 并进入 bridge-bound 模式。',
-  '不要 unset LARK_CHANNEL / LARK_CHANNEL_HOME / LARK_CHANNEL_PROFILE / LARKSUITE_CLI_CONFIG_DIR，也不要用 env -u LARK_CHANNEL 绕回本机普通配置。',
-  'Codex bridge 默认使用 danger-full-access 对齐 Claude bridge 的 bypassPermissions 行为，因此 lark-cli 应能像用户本机终端一样访问 keychain。',
-  '如果提示 lark-channel context detected but not bound，停止当前操作并请用户重启 bridge 或运行 bridge doctor/preflight；不要改用普通 profile，不要自行 bind，也不要直接读取 config.json 里的账号或密钥。',
-];
+const UNAVAILABLE_REPLY_TARGET_CODES = new Set([230011, 231003]);
 
 // Lark SDK logs API errors at error level even when the caller catches them.
 // These specific codes are EXPECTED in our flow (wiki-node lookup that
@@ -251,7 +245,7 @@ export async function startChannel(deps: StartChannelDeps): Promise<BridgeChanne
     // the normalizer drops (e.g. action.form_value on CardKit 2.0 form submits).
     includeRawEvent: true,
     outbound: {
-      streamThrottleMs: 400,
+      streamThrottleMs: 250,
     },
     // SDK 1.65.0-alpha.3+ knobs.
     wsConfig: {
@@ -927,14 +921,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
   // is reused below to log requested-vs-actual against the init event.
   const agentKind = controls.profileConfig.agentKind;
   const modelPref = controls.profileConfig.preferences.model;
-  const modelSelection = normalizeModelSelection(agentKind, modelPref);
-  const requestedModel = resolveModelArg(agentKind, modelPref);
+  const modelSelection = normalizeModelSelection(agentKind, modelPref, profileModelHome(controls));
+  const requestedModel = resolveModelArg(agentKind, modelPref, profileModelHome(controls));
   const prevModel = lastRunModelByScope.get(scope);
   const modelSwitched = prevModel !== undefined && prevModel !== modelSelection;
   lastRunModelByScope.set(scope, modelSelection);
   const extraInstructions = modelSwitched
     ? [
-        `用户刚把本会话使用的模型切换为「${modelLabel(agentKind, modelPref)}」。` +
+        `用户刚把本会话使用的模型切换为「${modelLabel(agentKind, modelPref, profileModelHome(controls))}」。` +
           '之前的对话里可能提到别的模型,请以当前模型为准;若被问到你用的是什么模型,据此回答。',
       ]
     : undefined;
@@ -992,6 +986,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
     access: accessDecision,
     capability,
     profileConfig: controls.profileConfig,
+    modelCatalogHome: profileModelHome(controls),
     sessions,
     sessionCatalog,
     workspaces,
@@ -1158,22 +1153,31 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
         | { update(next: object | ((current: object) => object)): Promise<void> }
         | undefined;
       const progress = createLazyProgressStream(scope, replyMode, () =>
-        channel.stream(
+        streamWithReplyFallback({
+          channel,
           chatId,
-          {
+          scope,
+          mode: replyMode,
+          sendOpts,
+          producerStarted: () => producerStarted,
+          input: {
             card: {
               initial: renderCard(initialState, cardRenderOptions),
               producer: async (ctrl) => {
                 producerStarted = true;
                 if (progress.abandoned()) return;
                 cardCtrl = ctrl;
-                await ctrl.update(renderCard(materializeFinalText(filterForPrefs(latestState)), cardRenderOptions));
+                await ctrl.update(
+                  renderCard(
+                    materializeFinalText(filterForPrefs(latestState)),
+                    cardRenderOptions,
+                  ),
+                );
                 await renderDone;
               },
             },
           },
-          sendOpts,
-        ),
+        }),
       );
       const renderDone = processAgentStream(
         handle,
@@ -1199,11 +1203,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
           fallback: async (state) => {
             if (controls.profileConfig.agentKind === 'codex') return;
             if (renderText(filterForPrefs(state)).trim() === '') return;
-            await channel.send(
+            await sendWithReplyFallback({
+              channel,
               chatId,
-              { card: renderCard(filterForPrefs(state), cardRenderOptions) },
+              scope,
+              content: { card: renderCard(filterForPrefs(state), cardRenderOptions) },
               sendOpts,
-            );
+            });
           },
         });
       } catch (err) {
@@ -1231,9 +1237,14 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
       let producerStarted = false;
       let markdownCtrl: { setContent(markdown: string): Promise<void> } | undefined;
       const progress = createLazyProgressStream(scope, replyMode, () =>
-        channel.stream(
+        streamWithReplyFallback({
+          channel,
           chatId,
-          {
+          scope,
+          mode: replyMode,
+          sendOpts,
+          producerStarted: () => producerStarted,
+          input: {
             markdown: async (ctrl) => {
               producerStarted = true;
               if (progress.abandoned()) return;
@@ -1242,8 +1253,7 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
               await renderDone;
             },
           },
-          sendOpts,
-        ),
+        }),
       );
       const renderDone = processAgentStream(
         handle,
@@ -1269,7 +1279,13 @@ async function runAgentBatch(deps: RunBatchDeps): Promise<void> {
             if (controls.profileConfig.agentKind === 'codex') return;
             const body = renderText(filterForPrefs(state));
             if (body.trim()) {
-              await channel.send(chatId, { markdown: body }, sendOpts);
+              await sendWithReplyFallback({
+                channel,
+                chatId,
+                scope,
+                content: { markdown: body },
+                sendOpts,
+              });
             }
           },
         });
@@ -1472,6 +1488,71 @@ async function recallStreamedMessage(
   }
 }
 
+type ReplyOptions = { replyTo: string; replyInThread?: boolean };
+type ChannelSendContent = Parameters<LarkChannel['send']>[1];
+type ChannelStreamInput = Parameters<LarkChannel['stream']>[1];
+
+/**
+ * A queued run can outlive its trigger message. Feishu then rejects both a
+ * reply and a reply-based stream with 230011/231003, even though posting to
+ * the chat itself is still valid. Preserve delivery by retrying once without
+ * the stale reply target. Topic placement may be lost, but the answer is not.
+ */
+function isUnavailableReplyTarget(err: unknown): boolean {
+  const code = codeFromObj(err);
+  if (code !== undefined && UNAVAILABLE_REPLY_TARGET_CODES.has(code)) return true;
+  const message = err instanceof Error ? err.message : String(err);
+  return /message (?:was withdrawn|is not found)|not exist or deleted/i.test(message);
+}
+
+async function sendWithReplyFallback(input: {
+  channel: LarkChannel;
+  chatId: string;
+  scope: string;
+  content: ChannelSendContent;
+  sendOpts: ReplyOptions;
+}): Promise<{ messageId?: string }> {
+  try {
+    return await input.channel.send(input.chatId, input.content, input.sendOpts);
+  } catch (err) {
+    if (!isUnavailableReplyTarget(err)) throw err;
+    log.warn('outbound', 'reply-target-unavailable', {
+      scope: input.scope,
+      replyTo: input.sendOpts.replyTo,
+      code: codeFromObj(err),
+      fallback: 'chat',
+    });
+    return input.channel.send(input.chatId, input.content);
+  }
+}
+
+async function streamWithReplyFallback(input: {
+  channel: LarkChannel;
+  chatId: string;
+  scope: string;
+  mode: 'card' | 'markdown';
+  input: ChannelStreamInput;
+  sendOpts: ReplyOptions;
+  producerStarted: () => boolean;
+}): Promise<unknown> {
+  try {
+    return await input.channel.stream(input.chatId, input.input, input.sendOpts);
+  } catch (err) {
+    // Retrying after the producer ran could duplicate partial output. The
+    // withdrawn-target failure happens while creating the initial message,
+    // before the SDK invokes the producer, which is safe to retry.
+    if (input.producerStarted() || !isUnavailableReplyTarget(err)) throw err;
+    log.warn('outbound', 'stream-reply-target-unavailable', {
+      scope: input.scope,
+      mode: input.mode,
+      replyTo: input.sendOpts.replyTo,
+      code: codeFromObj(err),
+      fallback: 'chat',
+    });
+    return input.channel.stream(input.chatId, input.input);
+  }
+}
+
 async function sendFinalReply(input: {
   channel: LarkChannel;
   chatId: string;
@@ -1492,29 +1573,20 @@ async function sendFinalReply(input: {
   }
 
   if (input.replyMode === 'card') {
-    const result = await input.channel.send(
-      input.chatId,
-      { card: renderCard(input.state, input.cardRenderOptions) },
-      input.sendOpts,
-    );
+    const result = await sendWithReplyFallback({
+      ...input,
+      content: { card: renderCard(input.state, input.cardRenderOptions) },
+    });
     requireMessageReceipt(result, 'card');
     log.info('outbound', 'sent', outboundLogFields(input, 'card', body, result));
   } else if (input.replyMode === 'markdown') {
     if (body.trim()) {
-      const result = await input.channel.send(
-        input.chatId,
-        { markdown: body },
-        input.sendOpts,
-      );
+      const result = await sendWithReplyFallback({ ...input, content: { markdown: body } });
       requireMessageReceipt(result, 'markdown');
       log.info('outbound', 'sent', outboundLogFields(input, 'markdown', body, result));
     }
   } else if (body.trim()) {
-    const result = await input.channel.send(
-      input.chatId,
-      { markdown: body },
-      input.sendOpts,
-    );
+    const result = await sendWithReplyFallback({ ...input, content: { markdown: body } });
     requireMessageReceipt(result, 'text');
     log.info('outbound', 'sent', outboundLogFields(input, 'text', body, result));
   }
@@ -1539,11 +1611,10 @@ async function sendCotDegradedNotice(input: {
     replyInThread: input.sendOpts.replyInThread === true,
   });
   try {
-    await input.channel.send(
-      input.chatId,
-      { markdown: 'COT 过程消息更新失败，已停止展示过程；最终答案仍会继续发送。' },
-      input.sendOpts,
-    );
+    await sendWithReplyFallback({
+      ...input,
+      content: { markdown: 'COT 过程消息更新失败，已停止展示过程；最终答案仍会继续发送。' },
+    });
   } catch (err) {
     log.warn('cot', 'degraded-notice-failed', {
       scope: input.scope,
@@ -1646,16 +1717,25 @@ async function processAgentStream(
         continue;
       }
       if (evt.type === 'usage') {
-        const { costUsd, inputTokens, outputTokens } = evt;
-        if (costUsd !== undefined || inputTokens !== undefined || outputTokens !== undefined) {
+        const { costUsd, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens } = evt;
+        const netNewInputTokens = inputTokens !== undefined && cachedInputTokens !== undefined
+          ? Math.max(0, inputTokens - cachedInputTokens) : undefined;
+        if ([costUsd, inputTokens, outputTokens, cachedInputTokens, reasoningOutputTokens]
+          .some((value) => value !== undefined)) {
           log.info('agent', 'usage', {
             ...(costUsd !== undefined ? { costUsd: Number(costUsd.toFixed(4)) } : {}),
             ...(inputTokens !== undefined ? { inputTokens } : {}),
             ...(outputTokens !== undefined ? { outputTokens } : {}),
+            ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+            ...(netNewInputTokens !== undefined ? { netNewInputTokens } : {}),
+            ...(reasoningOutputTokens !== undefined ? { reasoningOutputTokens } : {}),
           });
           if (costUsd !== undefined) reportMetric('cost_usd', costUsd);
           if (inputTokens !== undefined) reportMetric('tokens_in', inputTokens);
           if (outputTokens !== undefined) reportMetric('tokens_out', outputTokens);
+          if (cachedInputTokens !== undefined) reportMetric('tokens_cached_in', cachedInputTokens);
+          if (netNewInputTokens !== undefined) reportMetric('tokens_new_in', netNewInputTokens);
+          if (reasoningOutputTokens !== undefined) reportMetric('tokens_reasoning_out', reasoningOutputTokens);
         }
         continue;
       }
@@ -1900,10 +1980,7 @@ function buildPrompt(
       messageIds: batch.map((m) => m.messageId),
       source: 'im',
     },
-    instructions:
-      extraInstructions && extraInstructions.length > 0
-        ? [...BRIDGE_AGENT_INSTRUCTIONS, ...extraInstructions]
-        : BRIDGE_AGENT_INSTRUCTIONS,
+    instructions: extraInstructions,
     userInput: userPart,
     ...(topicContext.length > 0 ? { topicContext: topicContext.map(toPromptTopicMessage) } : {}),
     quotedMessages: quotes.map(toPromptQuote),

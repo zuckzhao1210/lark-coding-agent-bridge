@@ -1,3 +1,4 @@
+import { profileModelHome } from '../agent/models';
 import type { LarkChannel } from '@larksuite/channel';
 import type { AgentEvent } from '../agent/types';
 import { claudeCapability, codexCapability } from '../agent/capability';
@@ -313,6 +314,7 @@ async function runMeetingAgent(
     access: { ok: true, reason: 'allowed-chat' },
     capability,
     profileConfig: controls.profileConfig,
+    modelCatalogHome: profileModelHome(controls),
     sessions: deps.sessions,
     ...(deps.sessionCatalog ? { sessionCatalog: deps.sessionCatalog } : {}),
     workspaces: deps.workspaces,

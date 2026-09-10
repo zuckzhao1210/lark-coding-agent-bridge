@@ -182,6 +182,12 @@ interface SanitizeOptions {
 const LOCAL_LOG_SANITIZE: SanitizeOptions = { redactIds: false };
 const EXTERNAL_SANITIZE: SanitizeOptions = { redactIds: true };
 
+// These are counts, not credentials. Keep the exception narrow and numeric.
+const TOKEN_COUNT_KEYS = new Set([
+  'inputTokens', 'outputTokens', 'cachedInputTokens',
+  'netNewInputTokens', 'reasoningOutputTokens',
+]);
+
 function sanitizeLogEntry(
   entry: Record<string, unknown>,
   options: SanitizeOptions = EXTERNAL_SANITIZE,
@@ -201,6 +207,8 @@ function sanitizeLogValue(
   const normalizedKey = key.startsWith('_') ? key.slice(1) : key;
   if (value === undefined) return undefined;
   if (RAW_PAYLOAD_KEYS.has(normalizedKey)) return '[REDACTED]';
+  if (TOKEN_COUNT_KEYS.has(normalizedKey) && typeof value === 'number'
+      && Number.isSafeInteger(value) && value >= 0) return value;
   if (/token|secret|authorization/i.test(normalizedKey)) return '[REDACTED]';
   if (/attachment.*path|media.*path|^(cwd|cwdRealpath|path|absPath)$/i.test(normalizedKey)) {
     return '[REDACTED_PATH]';

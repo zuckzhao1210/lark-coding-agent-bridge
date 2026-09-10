@@ -1,3 +1,4 @@
+import { DEFAULT_MODEL, normalizeModelSelection, profileModelHome, resolveReasoningEffortArg, supportedReasoningLevels } from '../agent/models';
 import { dirname } from 'node:path';
 import { resolveAppPaths } from './app-paths';
 import { setSecret } from './keystore';
@@ -210,32 +211,55 @@ export async function savePreferencesConfig(
   });
 }
 
-/** Persist only the profile-wide model preference and refresh live state. */
-export async function saveModelPreference(
+/** Save model and compatible reasoning together under the same config lock. */
+export async function saveModelPreference(state: MutableProfileState, model: string | undefined): Promise<void> {
+  await updateModelPreferences(state, (profile) => {
+    const preferences = { ...profile.preferences, model };
+    preferences.reasoningEffort = resolveReasoningEffortArg(profile.agentKind, model,
+      profile.preferences.reasoningEffort, profileModelHome({ ...state, profileConfig: profile }));
+    return preferences;
+  });
+}
+
+/** Revalidate against the latest saved model, including clicks on stale cards. */
+export async function saveReasoningPreference(
+  state: MutableProfileState, effort: string | undefined, expectedModel: string,
+): Promise<void> {
+  await updateModelPreferences(state, (profile) => {
+    const home = profileModelHome({ ...state, profileConfig: profile });
+    if (profile.agentKind !== 'codex') throw new Error('当前 agent 不支持此推理强度设置。');
+    if (normalizeModelSelection(profile.agentKind, profile.preferences.model, home) !== expectedModel) {
+      throw new Error('模型已变更，请在更新后的卡片中重新选择推理强度。');
+    }
+    if (effort && !supportedReasoningLevels(profile.agentKind, profile.preferences.model, home)
+      .some((level) => level.effort === effort)) {
+      throw new Error('当前模型不支持此推理强度，请重新打开 /model 查看可用选项。');
+    }
+    return { ...profile.preferences, reasoningEffort: effort };
+  });
+}
+
+async function updateModelPreferences(
   state: MutableProfileState,
-  model: string | undefined,
+  update: (profile: ProfileConfig) => ProfileConfig['preferences'],
 ): Promise<void> {
   await withConfigFileLock(state.configPath, async () => {
     const root = await loadRootConfig(state.configPath);
+    const profile = root ? root.profiles[state.profile] : state.profileConfig;
+    if (!profile) throw new Error(`profile not found: ${state.profile}`);
+    const preferences = update(profile);
+    if (!preferences.model || preferences.model === DEFAULT_MODEL) delete preferences.model;
+    if (!preferences.reasoningEffort) delete preferences.reasoningEffort;
     if (!root) {
-      const { model: _model, ...preferences } = state.cfg.preferences ?? {};
-      state.cfg.preferences = model ? { ...preferences, model } : preferences;
-      state.profileConfig.preferences = {
-        ...state.profileConfig.preferences,
-        ...(model ? { model } : {}),
-      };
-      if (!model) delete state.profileConfig.preferences.model;
-      await saveConfig(state.cfg, state.configPath);
+      const cfg = { ...state.cfg, preferences: { ...state.cfg.preferences, ...preferences } };
+      if (!preferences.model) delete cfg.preferences.model;
+      if (!preferences.reasoningEffort) delete cfg.preferences.reasoningEffort;
+      await saveConfig(cfg, state.configPath);
+      state.cfg = cfg;
+      state.profileConfig = { ...profile, preferences };
       return;
     }
-
-    const profile = root.profiles[state.profile];
-    if (!profile) throw new Error(`profile not found: ${state.profile}`);
-    const { model: _model, ...preferences } = profile.preferences;
-    root.profiles[state.profile] = {
-      ...profile,
-      preferences: model ? { ...preferences, model } : preferences,
-    };
+    root.profiles[state.profile] = { ...profile, preferences };
     await saveRootConfig(root, state.configPath);
     state.profileConfig = root.profiles[state.profile]!;
     state.cfg = runtimeProfileConfig(root, state.profile);

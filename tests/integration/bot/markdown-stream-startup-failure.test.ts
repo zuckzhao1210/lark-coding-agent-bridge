@@ -96,7 +96,7 @@ describe('markdown stream startup failures', () => {
       path: { message_id: 'om_first' },
       data: { reaction_type: { emoji_type: 'Typing' } },
     });
-    // The 600ms message coalescing window has not elapsed yet, so no Codex
+    // The message coalescing window has not elapsed yet, so no Codex
     // process (and therefore no streaming card) can have been started.
     expect(h.agent.runOptions).toHaveLength(0);
 
@@ -380,6 +380,66 @@ describe('markdown stream startup failures', () => {
           (call[2] as { step?: string } | undefined)?.step === 'progress-stream',
       ),
     ).toBe(true);
+  });
+
+  it('delivers the final answer to the chat when the reply target was withdrawn', async () => {
+    const h = await createHarness({
+      messageReply: 'text',
+      events: [
+        { type: 'final_text', content: 'DELIVERED_AFTER_WITHDRAWAL' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      send: async (_chatId, _content, options) => {
+        if ((options as { replyTo?: string } | undefined)?.replyTo) {
+          throw Object.assign(new Error('The message was withdrawn.'), { code: 230011 });
+        }
+        return { messageId: 'fallback_message' };
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_withdrawn', 'run'));
+    await waitFor(() => h.channel.sent.length === 2);
+
+    expect(h.channel.sent[0]?.options).toMatchObject({ replyTo: 'om_withdrawn' });
+    expect(h.channel.sent[1]?.options).toBeUndefined();
+    expect(JSON.stringify(h.channel.sent[1]?.content)).toContain('DELIVERED_AFTER_WITHDRAWAL');
+  });
+
+  it('retries a progress stream in the chat when the reply target was withdrawn', async () => {
+    const streamOptions: unknown[] = [];
+    const visibleCards: unknown[] = [];
+    const h = await createHarness({
+      messageReply: 'card',
+      events: [
+        { type: 'text', delta: 'VISIBLE_PROGRESS' },
+        { type: 'final_text', content: 'VISIBLE_FINAL' },
+        { type: 'done', terminationReason: 'normal' },
+      ],
+      stream: async (_chatId, input, options) => {
+        streamOptions.push(options);
+        if ((options as { replyTo?: string } | undefined)?.replyTo) {
+          throw Object.assign(new Error('The message was withdrawn.'), { code: 230011 });
+        }
+        const producer = (input as {
+          card?: { producer?: (ctrl: { update(next: unknown): Promise<void> }) => Promise<void> };
+        }).card?.producer;
+        await producer?.({
+          update: async (next) => {
+            visibleCards.push(next);
+          },
+        });
+      },
+    });
+    await startTestBridge(h);
+
+    await h.channel.handlers.message?.(message('om_withdrawn_stream', 'run'));
+    await waitFor(() => visibleCards.some((card) => JSON.stringify(card).includes('VISIBLE_FINAL')));
+
+    expect(streamOptions).toHaveLength(2);
+    expect(streamOptions[0]).toMatchObject({ replyTo: 'om_withdrawn_stream' });
+    expect(streamOptions[1]).toBeUndefined();
+    expect(h.channel.sent).toHaveLength(0);
   });
 
   it('does not record delivery when the final send has no message receipt', async () => {

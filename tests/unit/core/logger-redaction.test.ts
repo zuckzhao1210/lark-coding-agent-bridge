@@ -47,6 +47,27 @@ describe('logger redaction', () => {
     expect(text).toContain('[REDACTED_PATH]');
   });
 
+  it('preserves numeric usage locally and in doctor while still redacting credentials', async () => {
+    const usage = {
+      inputTokens: 100, outputTokens: 20, cachedInputTokens: 80,
+      netNewInputTokens: 20, reasoningOutputTokens: 0,
+    };
+    log.info('agent', 'usage', {
+      ...usage, access_token: 123456, token: 'secret-value',
+      nested: { inputTokens: 'not-a-count-secret', cachedInputTokens: -1 },
+    });
+    await flushLogger();
+    const raw = await readTodayLog();
+    for (const text of [raw, sanitizeLogsForDoctor(raw)]) {
+      const entry = JSON.parse(text.trim());
+      expect(entry).toMatchObject(usage);
+      expect(text).not.toContain('123456');
+      expect(text).not.toContain('secret-value');
+      expect(text).not.toContain('not-a-count-secret');
+      expect(entry.nested.cachedInputTokens).toBe('[REDACTED]');
+    }
+  });
+
   it('redacts nested sdk args after stringify-style recursion', async () => {
     log.warn('sdk', 'error', {
       args: [

@@ -6,6 +6,7 @@ import type { LarkChannel, NormalizedMessage } from '@larksuite/channel';
 import { claudeCapability, codexCapability } from '../agent/capability';
 import {
   DEFAULT_MODEL,
+  profileModelHome,
   modelLabel,
   normalizeModelSelection,
   resolveModelCommandSelection,
@@ -30,6 +31,7 @@ import {
 import { GROUP_MSG_SCOPE, hasGroupMsgScope } from '../bot/app-scope';
 import { requestScopeGrantLink } from '../bot/wizard';
 import { forgetManagedCard, sendManagedCard, updateManagedCard } from '../card/managed';
+import { modelCard } from '../card/model-card';
 import { helpCard, resumeCard, statusCard, workspacesCard } from '../card/templates';
 import type { AppConfig, AppPreferences, MessageReplyMode, TenantBrand } from '../config/schema';
 import {
@@ -73,6 +75,12 @@ import {
   type CodexThreadHistoryEntry,
   type ListCodexThreadHistoryOptions,
 } from '../session/codex-history';
+import {
+  formatCodexUsage,
+  readCodexUsage,
+  type CodexUsageSnapshot,
+  type ReadCodexUsageOptions,
+} from '../session/codex-usage';
 import type { SessionCatalog, SessionCatalogIdentity } from '../session/catalog';
 import { isAlive, readAndPrune, resolveTarget } from '../runtime/registry';
 import { readUiSidecar } from '../ui/sidecar';
@@ -146,6 +154,9 @@ export interface CommandContext {
   codexHistoryProvider?: (
     options: ListCodexThreadHistoryOptions,
   ) => Promise<CodexThreadHistoryEntry[]>;
+  codexUsageProvider?: (
+    options: ReadCodexUsageOptions,
+  ) => Promise<CodexUsageSnapshot>;
   claudeHistoryProvider?: (cwd: string, limit: number) => Promise<SessionSummary[]>;
   /** Set when invoked from a CardKit 2.0 form submit. Keys are input `name`s. */
   formValue?: Record<string, unknown>;
@@ -179,6 +190,7 @@ const handlers: Record<string, Handler> = {
   '/ws': handleWs,
   '/resume': handleResume,
   '/status': handleStatus,
+  '/usage': handleUsage,
   '/help': handleHelp,
   '/account': handleAccount,
   '/config': handleConfig,
@@ -845,6 +857,52 @@ async function handleStatus(_args: string, ctx: CommandContext): Promise<void> {
   await ctx.channel.send(ctx.msg.chatId, { card }, commandReplyOptions(ctx));
 }
 
+async function handleUsage(_args: string, ctx: CommandContext): Promise<void> {
+  if (ctx.controls.profileConfig.agentKind !== 'codex') {
+    await reply(ctx, '当前 profile 使用 Claude，`/usage` 目前仅支持 Codex。');
+    return;
+  }
+
+  const codex = ctx.controls.profileConfig.codex;
+  if (!codex?.binaryPath) {
+    await reply(ctx, '当前 profile 没有可用的 Codex CLI，暂时无法查询用量。');
+    return;
+  }
+
+  const catalogEntry =
+    ctx.sessionCatalog && ctx.sessionCatalogIdentity
+      ? ctx.sessionCatalog.activeFor(ctx.sessionCatalogIdentity)
+      : undefined;
+  const modelHome = profileModelHome(ctx.controls);
+  const provider = ctx.codexUsageProvider ?? readCodexUsage;
+
+  try {
+    const snapshot = await provider({
+      binary: codex.binaryPath,
+      profileStateDir: commandProfilePaths(ctx).profileDir,
+      ...(modelHome ? { codexHome: modelHome } : {}),
+      ...(codex.inheritCodexHome !== undefined
+        ? { inheritCodexHome: codex.inheritCodexHome }
+        : {}),
+      ...(catalogEntry?.threadId ? { threadId: catalogEntry.threadId } : {}),
+    });
+    const markdown = formatCodexUsage(snapshot);
+
+    if (ctx.chatMode === 'p2p') {
+      await reply(ctx, markdown);
+      return;
+    }
+
+    await ctx.channel.send(ctx.msg.senderId, { markdown });
+    await reply(ctx, '📊 用量详情已私信发送。');
+  } catch (err) {
+    log.warn('command', 'codex-usage-failed', {
+      message: err instanceof Error ? err.message : String(err),
+    });
+    await reply(ctx, 'Codex 用量查询失败，请稍后重试；如果持续失败可使用 `/doctor` 检查 CLI 状态。');
+  }
+}
+
 function formatOwnerState(ctx: CommandContext): string {
   const state = ctx.controls.ownerRefreshState;
   const owner = ctx.controls.botOwnerId ? 'present' : 'missing';
@@ -1347,46 +1405,33 @@ async function handleHelp(_args: string, ctx: CommandContext): Promise<void> {
 // ─── /model ──────────────────────────────────────────────────
 
 async function handleModel(args: string, ctx: CommandContext): Promise<void> {
+  if (args.trim().startsWith('effort ')) {
+    await handleModelEffort(args.trim().slice('effort '.length), ctx);
+    return;
+  }
   const agentKind = ctx.controls.profileConfig.agentKind;
   const currentPreference = ctx.controls.profileConfig.preferences.model;
-  const current = normalizeModelSelection(agentKind, currentPreference);
-  const input = args.trim();
+  const current = normalizeModelSelection(agentKind, currentPreference, profileModelHome(ctx.controls));
+  const input = ctx.fromCardAction && args.startsWith('select ')
+    ? args.slice('select '.length).trim()
+    : args.trim();
 
   if (!input) {
-    const options = agentKind === 'codex'
-      ? [
-          '`/model sol` — GPT-5.6 Sol',
-          '`/model terra` — GPT-5.6 Terra',
-          '`/model luna` — GPT-5.6 Luna',
-          '`/model default` — 跟随 Codex 默认',
-        ]
-      : [
-          ...supportedModels(agentKind)
-            .filter((model) => model.value !== DEFAULT_MODEL)
-            .map((model) => `\`/model ${model.value}\` — ${model.label}`),
-          '`/model default` — 跟随 Claude Code 默认',
-        ];
-    await reply(
-      ctx,
-      [
-        `当前模型：**${modelLabel(agentKind, current)}**`,
-        '',
-        '可用命令：',
-        ...options,
-        '',
-        '_模型是 Profile 全局设置，保存后从下一条消息开始生效。_',
-      ].join('\n'),
-    );
+    await sendManagedCard(ctx.channel, ctx.msg.chatId, modelCard(agentKind, current, false, profileModelHome(ctx.controls), ctx.controls.profileConfig.preferences.reasoningEffort), commandReplyOptions(ctx));
     return;
   }
 
-  const selection = resolveModelCommandSelection(agentKind, input);
+  const selection = resolveModelCommandSelection(agentKind, input, profileModelHome(ctx.controls));
   if (!selection) {
     await reply(ctx, `不支持的模型：\`${input}\`。发送 \`/model\` 查看可用选项。`);
     return;
   }
   if (selection === current && (selection !== DEFAULT_MODEL || !currentPreference)) {
-    await reply(ctx, `当前已是 **${modelLabel(agentKind, current)}**。`);
+    if (ctx.fromCardAction) {
+      refreshModelCardAfterClick(ctx);
+      return;
+    }
+    await reply(ctx, `当前已是 **${modelLabel(agentKind, current, profileModelHome(ctx.controls))}**。`);
     return;
   }
 
@@ -1405,10 +1450,59 @@ async function handleModel(args: string, ctx: CommandContext): Promise<void> {
     agentKind,
     model: selection,
   });
+  if (ctx.fromCardAction) {
+    refreshModelCardAfterClick(ctx);
+    return;
+  }
   await reply(
     ctx,
-    `✅ 已切换为 **${modelLabel(agentKind, selection)}**\n\n从下一条消息开始生效。`,
+    `✅ 已切换为 **${modelLabel(agentKind, selection, profileModelHome(ctx.controls))}**\n\n从下一条消息开始生效。`,
   );
+}
+
+async function handleModelEffort(args: string, ctx: CommandContext): Promise<void> {
+  const current = normalizeModelSelection(ctx.controls.profileConfig.agentKind,
+    ctx.controls.profileConfig.preferences.model, profileModelHome(ctx.controls));
+  const parts = args.trim().split(/\s+/);
+  const expectedModel = ctx.fromCardAction ? parts[0] : current;
+  const effort = (ctx.fromCardAction ? parts[1] : parts[0])?.toLowerCase();
+  if (!expectedModel || !effort || parts.length !== (ctx.fromCardAction ? 2 : 1)) {
+    await reply(ctx, '用法：`/model effort <强度|default>`，发送 `/model` 查看当前模型支持的档位。');
+    return;
+  }
+  try {
+    await configOps.saveReasoningPreference(ctx.controls, effort === DEFAULT_MODEL ? undefined : effort, expectedModel);
+  } catch (err) {
+    log.fail('command', err, { step: 'model.effort.save' });
+    await reply(ctx, `❌ 推理强度未保存：${err instanceof Error ? err.message : '请重试。'}`);
+    if (ctx.fromCardAction) refreshModelCardAfterClick(ctx, false);
+    return;
+  }
+  if (ctx.fromCardAction) {
+    refreshModelCardAfterClick(ctx);
+    return;
+  }
+  await reply(ctx, `✅ 推理强度已设为 **${effort === DEFAULT_MODEL ? '跟随 CLI 默认' : effort}**，从下一条消息开始生效。`);
+}
+
+// Lark restores the pre-click card when the callback returns. Update only after
+// it settles, and read the latest preference so rapid clicks cannot repaint an old selection.
+const pendingModelCardUpdates = new Map<string, ReturnType<typeof setTimeout>>();
+function refreshModelCardAfterClick(ctx: CommandContext, saved = true): void {
+  const key = `${ctx.controls.profile}:${ctx.msg.messageId}`;
+  clearTimeout(pendingModelCardUpdates.get(key));
+  pendingModelCardUpdates.set(key, setTimeout(() => {
+    pendingModelCardUpdates.delete(key);
+    const card = modelCard(ctx.controls.profileConfig.agentKind,
+      ctx.controls.profileConfig.preferences.model, saved, profileModelHome(ctx.controls), ctx.controls.profileConfig.preferences.reasoningEffort);
+    void updateManagedCard(ctx.channel, ctx.msg.messageId, card).catch(async (err) => {
+      log.warn('command', 'model-card-update-fallback', { err: String(err) });
+      // After a restart the original card mapping is gone; send a fresh picker.
+      await sendManagedCard(ctx.channel, ctx.msg.chatId, card, commandReplyOptions(ctx)).catch((fallbackErr) => {
+        log.fail('command', fallbackErr, { step: 'model.refresh-card' });
+      });
+    });
+  }, FORM_SETTLE_MS));
 }
 
 // ─── /account ──────────────────────────────────────────────────
@@ -1814,10 +1908,12 @@ async function showConfigForm(ctx: CommandContext): Promise<void> {
   const consoleUrl = sidecar && isAlive(sidecar.pid) ? sidecar.url : undefined;
   const card = configFormCard({
     agentKind: ctx.controls.profileConfig.agentKind,
+    codexHome: profileModelHome(ctx.controls),
     mode: ctx.controls.profileConfig.mode,
     model: normalizeModelSelection(
       ctx.controls.profileConfig.agentKind,
       ctx.controls.cfg.preferences?.model,
+      profileModelHome(ctx.controls),
     ),
     messageReply: getMessageReplyMode(ctx.controls.cfg),
     showToolCalls: getShowToolCalls(ctx.controls.cfg),
@@ -1878,10 +1974,10 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
   // tidy (resolveModelArg treats both the same way).
   const agentKind = ctx.controls.profileConfig.agentKind;
   const rawModel = String(fv.model ?? '').trim();
-  const modelValid = rawModel !== '' && supportedModels(agentKind).some((m) => m.value === rawModel);
+  const modelValid = rawModel !== '' && supportedModels(agentKind, profileModelHome(ctx.controls)).some((m) => m.value === rawModel);
   const modelSelection = modelValid
     ? rawModel
-    : normalizeModelSelection(agentKind, ctx.controls.cfg.preferences?.model);
+    : normalizeModelSelection(agentKind, ctx.controls.cfg.preferences?.model, profileModelHome(ctx.controls));
   const model = modelSelection === DEFAULT_MODEL ? undefined : modelSelection;
   const rawCotMessages = String(fv.cot_messages ?? '').trim();
   const cotMessages =
@@ -2030,6 +2126,7 @@ async function submitConfig(ctx: CommandContext): Promise<void> {
       formMsgId,
       configSavedCard({
         agentKind,
+        codexHome: profileModelHome(ctx.controls),
         mode,
         model: modelSelection,
         messageReply,

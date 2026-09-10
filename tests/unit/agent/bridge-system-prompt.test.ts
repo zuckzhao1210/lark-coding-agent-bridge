@@ -40,6 +40,16 @@ describe('bridge system prompt bot collaboration rules', () => {
 });
 
 describe('buildBridgeSystemPrompt', () => {
+  it('keeps the actual context schema and a single bridge-managed callback contract', () => {
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('bridge_context.chatType');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('quoted_messages');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('interactive_cards');
+    expect(BRIDGE_SYSTEM_PROMPT).toContain('lark-channel-bridge card send --card');
+    expect(BRIDGE_SYSTEM_PROMPT).not.toContain('lark-cli im send-card');
+    expect(BRIDGE_SYSTEM_PROMPT).not.toContain('SIGNED_TOKEN_FROM_LARK_CLI');
+    expect(BRIDGE_SYSTEM_PROMPT).not.toContain('bridge_context.chat_type');
+  });
+
   it('returns the base prompt unchanged when no identity is available', () => {
     expect(buildBridgeSystemPrompt(undefined)).toBe(BRIDGE_SYSTEM_PROMPT);
   });

@@ -86,6 +86,21 @@ describe('CodexAdapter process contract', () => {
     expect(record.env.APP_SECRET).toBe('inherited-secret');
   });
 
+  it.each([undefined, 'thread-existing'])('sends reasoning overrides to the spawned CLI (%s)', async (threadId) => {
+    const fake = await createFakeCodex({ lines: [{ type: 'turn.completed' }] });
+    cleanup.push(fake.dir);
+    const run = new CodexAdapter({ binary: fake.path, profileStateDir: fake.dir }).run({
+      runId: 'run-effort', prompt: 'hello', cwd: await realpath(fake.dir),
+      model: 'gpt-6-astra', reasoningEffort: 'ultra', threadId,
+    });
+    await collect(run.events);
+    const record = await readRecord(fake.recordPath);
+    expect(record.argv).toContain('model_reasoning_effort="ultra"');
+    expect(record.argv[record.argv.indexOf('model_reasoning_effort="ultra"') - 1]).toBe('-c');
+    expect(record.argv[record.argv.indexOf('--model') + 1]).toBe('gpt-6-astra');
+    if (threadId) expect(record.argv).toContain(threadId);
+  });
+
   it('injects the active bridge profile env while preserving Codex env overrides', async () => {
     process.env.CODEX_HOME = '/outer/codex-home';
     const fake = await createFakeCodex({

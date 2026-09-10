@@ -1,7 +1,7 @@
-import { realpath } from 'node:fs/promises';
+import { realpath, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { claudeCapability } from '../../../src/agent/capability';
+import { claudeCapability, codexCapability } from '../../../src/agent/capability';
 import { ActiveRuns } from '../../../src/bot/active-runs';
 import { startRunFlow } from '../../../src/bot/run-flow';
 import { ProcessPool } from '../../../src/bot/process-pool';
@@ -74,6 +74,24 @@ describe('IM run flow', () => {
       cwd: workspaceRealpath,
       sessionId: 'sess-1',
     });
+  });
+
+  it('passes the selected reasoning effort through the executor to the agent', async () => {
+    const h = await createHarness({ defaultWorkspace: true });
+    h.profileConfig.agentKind = 'codex';
+    h.profileConfig.codex = { binaryPath: 'codex', codexHome: h.tmp.root };
+    h.profileConfig.preferences = { model: 'model-a', reasoningEffort: 'ultra' };
+    await writeFile(join(h.tmp.root, 'models_cache.json'), JSON.stringify({ models: [
+      { slug: 'model-a', visibility: 'list', supported_reasoning_levels: [{ effort: 'ultra' }] },
+    ] }));
+    const result = await startRunFlow({
+      scopeId: 'chat-1', scope: { source: 'im', chatId: 'chat-1', actorId: 'ou_user' },
+      prompt: 'hello', attachments: [], access: { ok: true, reason: 'allowed-user' },
+      capability: codexCapability(h.profileConfig), profileConfig: h.profileConfig,
+      sessions: h.sessions, workspaces: h.workspaces, executor: h.executor, now: 1000,
+    });
+    expect(result.ok).toBe(true);
+    expect(h.agent.runOptions[0]).toMatchObject({ model: 'model-a', reasoningEffort: 'ultra' });
   });
 
   it('uses the profile default workspace when a scope has no explicit binding', async () => {

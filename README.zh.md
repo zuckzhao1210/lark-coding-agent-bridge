@@ -155,8 +155,10 @@ lark-channel-bridge profile export <name> --include-secrets --yes
 | `/ws remove <name>` | 删除命名工作空间 |
 | `/resume` | 恢复同 agent、工作目录、权限模式兼容的历史会话 |
 | `/status` | 查看 profile、agent、工作目录、会话、lark-cli 身份和运行状态 |
+| `/usage` | 查看 Codex 限额窗口、账户用量和当前会话 token 用量 |
 | `/config` | 调整展示偏好、访问控制和 lark-cli 身份策略 |
-| `/model [sol\|terra\|luna\|default]` | 查看或切换当前 Profile 的模型（下一条消息生效） |
+| `/model` | 打开模型与推理强度卡片；选项读取当前 Profile 的 Codex CLI 缓存（下一条消息生效） |
+| `/model effort <强度\|default>` | 设置当前模型的推理强度；`default` 恢复跟随 CLI 配置 |
 | `/invite user @某人` | 允许用户私聊使用 bot |
 | `/invite admin @某人` | 添加访问控制管理员 |
 | `/invite group` | 允许当前群使用 bot |

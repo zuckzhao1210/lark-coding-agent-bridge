@@ -6,6 +6,7 @@ import type { CotMessagesMode, MessageReplyMode } from '../config/schema';
 export interface ConfigFormOpts {
   /** Profile's agent kind — decides which model catalog the picker shows. */
   agentKind: AgentKind;
+  codexHome?: string;
   /** Deployment mode: 'personal' (default) or 'team'. */
   mode: ProfileMode;
   /** Current model selection (a value from {@link supportedModels}). */
@@ -164,7 +165,7 @@ export function configFormCard(opts: ConfigFormOpts): object {
               tag: 'select_static',
               name: 'model',
               initial_option: opts.model,
-              options: supportedModels(opts.agentKind).map((m) => ({
+              options: supportedModels(opts.agentKind, opts.codexHome).map((m) => ({
                 text: { tag: 'plain_text', content: m.label },
                 value: m.value,
               })),
@@ -348,7 +349,7 @@ export function configSavedCard(opts: ConfigFormOpts): object {
           content:
             '✅ **偏好已保存**\n\n' +
             `**运行模式**:\`${opts.mode === 'team' ? '团队版' : '个人版'}\`\n` +
-            `**模型**:\`${modelLabel(opts.agentKind, opts.model)}\`\n` +
+            `**模型**:\`${modelLabel(opts.agentKind, opts.model, opts.codexHome)}\`\n` +
             `**消息回复方式**:${replyLabel}\n` +
             `**工具调用显示**:\`${opts.showToolCalls ? 'show' : 'hide'}\`\n` +
             `**COT 过程消息**:\`${cotLabel}\`\n` +
