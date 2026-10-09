@@ -3,7 +3,7 @@ import type { Readable, Writable } from 'node:stream';
 import { join } from 'node:path';
 import type { SandboxMode } from '../../config/profile-schema';
 import { log } from '../../core/logger';
-import { buildAgentProcessEnvironment } from '../../platform/proxy-env';
+import { buildCodexProcessEnvironment } from '../../platform/proxy-env';
 import { mergeProcessEnv, spawnProcess, type SpawnedProcessByStdio } from '../../platform/spawn';
 import { SpawnFailed } from '../../runtime/errors';
 import { prefixBridgeSystemPrompt } from '../bridge-system-prompt';
@@ -128,7 +128,7 @@ export class CodexAdapter implements AgentAdapter {
     }
     const child = spawnProcess(this.binary, args, {
       cwd: opts.cwd,
-      env: mergeProcessEnv(buildAgentProcessEnvironment(), envOverrides),
+      env: mergeProcessEnv(buildCodexProcessEnvironment(), envOverrides),
       stdio: ['pipe', 'pipe', 'pipe'],
     }) as CodexChild;
 

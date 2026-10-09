@@ -29,6 +29,7 @@ const {
   PROXY_ENV_NAMES,
   agentProxyEnvName,
   buildAgentProcessEnvironment,
+  buildCodexProcessEnvironment,
   serializeAgentProxyEnvironment,
 } = await import('../../../src/platform/proxy-env');
 
@@ -89,6 +90,55 @@ describe('systemd agent proxy environment sync', () => {
 
     expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
     expect(env.PATH).toBe('/usr/bin');
+  });
+
+  it('follows GNOME proxy changes for each new agent without restarting the daemon', () => {
+    let mode = 'manual';
+    mocks.spawnSync.mockImplementation((bin: string) => {
+      if (bin !== 'gsettings') return { status: 0, stdout: '', stderr: '' };
+      return {
+        status: 0,
+        stdout: [
+          `org.gnome.system.proxy mode '${mode}'`,
+          'org.gnome.system.proxy use-same-proxy true',
+          "org.gnome.system.proxy.http host '127.0.0.1'",
+          'org.gnome.system.proxy.http port 7890',
+          "org.gnome.system.proxy.https host '127.0.0.1'",
+          'org.gnome.system.proxy.https port 7890',
+          "org.gnome.system.proxy ignore-hosts ['localhost', '127.0.0.1']",
+        ].join('\n'),
+        stderr: '',
+      };
+    });
+    const base = {
+      XDG_CURRENT_DESKTOP: 'ubuntu:GNOME',
+      LARK_CHANNEL_AGENT_HTTPS_PROXY: 'http://127.0.0.1:8888',
+      LARK_CHANNEL_AGENT_http_proxy: 'http://127.0.0.1:8888',
+    };
+
+    const enabled = buildCodexProcessEnvironment(base);
+    expect(enabled.HTTP_PROXY).toBe('http://127.0.0.1:7890');
+    expect(enabled.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
+    expect(enabled.NO_PROXY).toBe('localhost,127.0.0.1');
+    expect(enabled.LARK_CHANNEL_AGENT_HTTPS_PROXY).toBe('http://127.0.0.1:8888');
+
+    mode = 'none';
+    const disabled = buildCodexProcessEnvironment(base);
+    expect(PROXY_ENV_NAMES.every((name) => disabled[name] === undefined)).toBe(true);
+    expect(buildAgentProcessEnvironment(base).HTTPS_PROXY).toBe('http://127.0.0.1:8888');
+
+    mode = 'manual';
+    expect(buildCodexProcessEnvironment({ XDG_CURRENT_DESKTOP: 'ubuntu:GNOME' }).HTTPS_PROXY)
+      .toBe('http://127.0.0.1:7890');
+  });
+
+  it('falls back to captured proxy values if GNOME settings are unavailable', () => {
+    mocks.spawnSync.mockReturnValue({ status: 1, stdout: '', stderr: 'unavailable' });
+    const env = buildCodexProcessEnvironment({
+      XDG_CURRENT_DESKTOP: 'GNOME',
+      LARK_CHANNEL_AGENT_HTTPS_PROXY: 'http://127.0.0.1:7890',
+    });
+    expect(env.HTTPS_PROXY).toBe('http://127.0.0.1:7890');
   });
 
   it('keeps standard proxy variables out of the bridge service process', () => {
